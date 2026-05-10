@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=WorkBuddy
+Comment=Run WorkBuddy on Linux
+Exec=__EXEC__
+Icon=workbuddy
+Type=Application
+Categories=Development;IDE;
+StartupNotify=true
+StartupWMClass=WorkBuddy
+MimeType=x-scheme-handler/workbuddy;

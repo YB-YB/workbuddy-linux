@@ -1,0 +1,41 @@
+{
+  "private": true,
+  "name": "@genie/workbuddy-desktop",
+  "version": "4.22.10",
+  "description": "WorkBuddy Desktop - AI Agent Desktop Application",
+  "author": "Tencent Technology (Shenzhen) Company Limited",
+  "main": "main/index.js",
+  "dependencies": {
+    "@opentelemetry/api": "^1.8.0",
+    "@opentelemetry/core": "^1.25.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.51.1",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.51.1",
+    "@opentelemetry/resources": "^1.24.0",
+    "@opentelemetry/sdk-trace-base": "^1.25.0",
+    "@modelcontextprotocol/sdk": "1.24.3",
+    "@tencent/docs-engine": "0.0.1-beta.7",
+    "@wecom/aibot-node-sdk": "1.0.2",
+    "@larksuiteoapi/node-sdk": "^1.60.0",
+    "dingtalk-stream": "^2.1.5",
+    "axios": "^1.13.6",
+    "better-sqlite3": "^12.8.0",
+    "@lydell/node-pty": "^1.2.0-beta.12",
+    "@openai/agents": "^0.5.2",
+    "adm-zip": "^0.5.16",
+    "chokidar": "^3.6.0",
+    "nunjucks": "3.1.7",
+    "reflect-metadata": "^0.1.13",
+    "zod": "<=3.25.67",
+    "electron-log": "^5.4.3",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "@lydell/node-pty-darwin-arm64": "1.2.0-beta.12",
+    "@lydell/node-pty-darwin-x64": "1.2.0-beta.12",
+    "@lydell/node-pty-linux-arm64": "1.2.0-beta.12",
+    "@lydell/node-pty-linux-x64": "1.2.0-beta.12",
+    "@lydell/node-pty-win32-arm64": "1.2.0-beta.12",
+    "@lydell/node-pty-win32-x64": "1.2.0-beta.12",
+    "node-pty": "1.1.0"
+  }
+}

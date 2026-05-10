@@ -1,0 +1,4 @@
+*.sh text eol=lf
+Makefile text eol=lf
+*.desktop text eol=lf
+packaging/linux/control text eol=lf

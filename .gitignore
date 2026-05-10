@@ -1,0 +1,34 @@
+# Official upstream inputs and extracted application payloads.
+downloads/
+build/
+reference/
+*.dmg
+*.app/
+*.asar
+*.asar.unpacked/
+
+# Generated Linux applications and packages.
+workbuddy-app/
+workbuddy-app-next/
+dist/
+dist-next/
+*.deb
+*.rpm
+*.pkg.tar.zst
+.cache/
+
+# Local runtime caches.
+node-runtime/
+electron/
+node_modules/
+
+# Logs and temporary files.
+*.log
+*.tmp
+*.part
+
+# OS/editor noise.
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

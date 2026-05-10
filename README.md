@@ -1,0 +1,283 @@
+# WorkBuddy for Linux (Unofficial)
+
+[English](#english) | [简体中文](#简体中文)
+
+---
+
+# 简体中文
+
+## 项目简介
+
+这是一款非官方社区工具，核心作用是将你自行获取的官方 WorkBuddy macOS Intel/x64 版本 DMG 安装包，转换为可在本地 Linux 系统运行的 Electron 应用。
+
+本仓库**仅作为转换工具**，绝不充当软件分发渠道。请务必前往官方网站下载正版 Intel/x64 架构 DMG 安装包，放置于项目 `downloads/` 目录下；所有生成的应用目录、安装包产物均仅保留在本地，且已加入 Git 忽略规则，不会被提交至仓库。
+
+遇到任何 Bug 请在此仓库提 Issue ，严禁跳脸向官方客服反馈在 Linux 移植后使用的相关问题。
+
+## 项目状态
+
+目前项目已完整实现 Linux 端的转换与打包核心流程，具体功能如下：
+
+- 借助 `7z`/`7zz` 工具，自动提取 `downloads/` 目录下唯一的官方 DMG 安装包；
+- 从 macOS 应用包元数据中，自动识别上游 Electron 版本号；
+- 下载与识别版本匹配的 Linux 版 Electron 运行时；
+- 将 WorkBuddy 应用核心程序（`app.asar` 及 `app.asar.unpacked`）复制至 `resources/` 目录；
+- 通过 `@electron/rebuild`，针对 Linux 系统与 Electron 环境重建原生 Node 模块；
+- 安装 `@lydell/node-pty` Linux 平台预编译包以支持内置 CLI；
+- 更新适配 Linux 平台的依赖包，例如 `@vscode/ripgrep`；
+- 自动生成 Linux 系统启动器与桌面入口文件；
+- 根据当前 Linux 发行版，一键生成适配的 `.deb`、`.rpm` 或 `.pkg.tar.zst` 格式安装包。
+
+> 项目**未集成自动更新功能**，如需更新软件，只需手动下载新版官方 DMG，放入 `downloads/` 目录后，重新执行构建、安装流程即可覆盖本地旧版本。
+
+## 快速上手
+
+1. 克隆本项目至本地 Linux 机器；
+2. 在项目根目录创建 `downloads` 文件夹；
+3. 将**唯一一份**官方 Intel/x64 架构 DMG 安装包放入 `downloads/` 目录；
+4. 依次执行以下命令：
+
+```bash
+bash scripts/install-deps.sh
+make build-app
+make package
+make install
+```
+
+`scripts/install-deps.sh` 脚本会自动识别当前系统的包管理器（支持 `apt`、`dnf5`、`dnf`、`pacman`、`zypper`），并一键安装 DMG 提取、Electron 运行时下载、原生模块重建、安装包生成所需的全部依赖。
+
+## 构建与运行
+
+### 推荐构建方式
+
+将唯一的 `.dmg` 文件放入 `downloads/` 目录后，直接执行构建命令：
+
+```bash
+make build-app
+```
+
+### 自定义 DMG 路径
+
+也可手动指定官方 DMG 文件路径（仅为输入路径，不绑定软件版本）：
+
+```bash
+make build-app DMG=/path/to/WorkBuddy.dmg
+```
+
+### 运行生成的应用
+
+```bash
+make run-app
+```
+
+### 打包并安装
+
+自动生成适配当前发行版的安装包，并完成本地安装：
+
+```bash
+make package
+make install
+```
+
+## 实现原理
+
+本项目参考了 `codebuddy-ide-cn-linux`（同作者的成功移植案例）的本地转换与打包逻辑，但**未移植自动更新模块**，核心流程如下：
+
+1. 以用户自行提供的官方 macOS DMG 安装包作为输入源；
+2. 仅提取 Electron 应用核心程序，不对外分发任何官方软件内容；
+3. 用对应版本的 Linux Electron 运行时，替换原 macOS 版运行时；
+4. **原生模块从源码重新编译**：macOS DMG 预打包的原生模块（如 `node-pty`、`better-sqlite3`）无法在 Linux 上直接使用。本工具自动从 npm 下载对应版本的完整源码，在隔离目录基于 Linux Electron 头文件重新编译为 ELF 二进制文件，再覆盖回应用目录；
+5. 安装 Linux 平台专属的预编译包（如 `@lydell/node-pty-linux-x64`）以支持内置终端 CLI；
+6. 更新适配 Linux 平台的专属二进制依赖包；
+7. 本地生成 Linux 系统启动配置与安装包元数据；
+8. 编译生成对应发行版的原生安装包，通过 `make install` 完成最新版本安装。
+
+WorkBuddy 基于 VS Code/Electron 开发，其 macOS 应用的 `app.asar` 文件包含跨平台 JavaScript 核心代码，`app.asar.unpacked` 目录包含原生模块。Linux 转换只需完成平台二进制文件替换、原生模块重新编译即可实现兼容。
+
+## 移植后的已知限制
+
+由于上游打包特性的限制以及闭源商业组件的存在，移植后的 Linux 版本存在以下两点预期内的功能降级（不影响核心开发体验）：
+
+1. **腾讯文档引擎失效**：官方 DMG 包内捆绑的 `@tencent/docs-engine` 仅提供了 macOS Arm64 架构的专有二进制库（`.dylib`）。Linux 无法运行此类文件且无源码可供重新编译，为防止底层引发 `dlopen invalid ELF header` 导致的主进程崩溃，转换脚本已将其强制移除。**影响**：应用内如果包含深度整合的腾讯文档协同编辑功能将不可用，不影响 AI 助手和本地代码编辑。
+2. **AI 代码沙盒降级**：内置 CLI 工具 `vendor/sandbox` 是腾讯内部私有的代码沙盒引擎（Tencent Sandbox），使用的是包含 Windows 和 macOS 格式的预编译隔离库。由于缺少 Linux 版沙盒核心，脚本已清理无关平台的二进制文件。**影响**：当 AI 助手尝试全自动执行代码时，会因为沙盒模块缺失而回退到无沙盒的真实终端中执行，或者提示安全环境不可用而拒绝执行自动化脚本。
+
+## 常用自定义配置
+
+如需自定义安装路径、切换 Electron 镜像，可通过以下命令执行：
+
+```bash
+# 自定义安装目录
+WORKBUDDY_INSTALL_DIR=/opt/tmp/workbuddy-app bash install.sh
+# 切换Electron镜像源
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ bash install.sh
+# 自定义Electron头文件下载地址
+ELECTRON_HEADERS_URL=https://artifacts.electronjs.org/headers/dist bash install.sh
+```
+
+## 仓库维护规范
+
+以下目录因会存放上游软件、生成类安装包文件，已被 Git 忽略，**切勿手动提交**：
+
+- `downloads/`
+- `build/`
+- `workbuddy-app/`
+- `dist/`
+- `reference/`
+
+禁止提交 DMG 安装包、解压后的 `.app` 应用包、生成的 Linux 应用目录及各类原生安装包产物。
+
+## 免责声明
+
+本项目为**非官方社区开源工具**，与腾讯官方无任何关联。WorkBuddy 是腾讯旗下产品（版权 © 2026 腾讯云计算（北京）有限责任公司丨腾讯科技（深圳）有限公司 版权所有）。本工具不分发任何 WorkBuddy 官方软件，仅自动化实现用户对自有正版安装包的格式转换流程。
+
+使用本工具即表示您已知悉并同意以下内容：
+
+1. **用户责任**：您有责任确保自行获取的 DMG 安装包来源合法，并遵守 WorkBuddy 的最终用户许可协议（EULA）及相关服务条款。
+2. **无担保**：本工具按"现状"提供，不提供任何形式的明示或暗示担保，包括但不限于对适销性、特定用途适用性和非侵权性的担保。
+3. **无官方支持**：本项目是独立社区项目，腾讯官方不对本工具提供任何技术支持。在 Linux 移植环境下遇到的问题，请在本仓库提 Issue，**严禁向官方客服反馈**。
+4. **风险自担**：使用本工具进行格式转换和运行所产生的一切后果，由用户自行承担。
+5. **商标声明**：WorkBuddy、CodeBuddy 及相关标识是腾讯公司的商标或注册商标。本项目使用这些名称仅用于描述性目的，不暗示任何官方认可或授权。
+
+## 开源许可证
+
+本项目采用 MIT 开源许可证，详细内容请查看 [LICENSE](LICENSE) 文件。
+
+---
+
+# English
+
+## Project Introduction
+
+This is an unofficial community tool designed to convert your legally obtained official WorkBuddy macOS Intel/x64 DMG installer into a local Linux Electron application.
+
+This repository **serves solely as a converter** and will never act as a software redistribution channel. Please download the genuine Intel/x64 DMG installer from the official website and place it in the `downloads/` directory. All generated application directories and package artifacts are stored locally only and are added to Git ignore rules to avoid being committed to the repository.
+
+If you encounter any bugs, please submit an Issue in this repository. Do not directly contact official customer service to report issues related to usage after Linux porting.
+
+## Project Status
+
+The project currently fully implements the core Linux-side conversion and packaging workflow, with specific features as follows:
+
+- Automatically extract the single official DMG installer in the `downloads/` directory via `7z`/`7zz`;
+- Detect the upstream Electron version from the macOS application bundle metadata;
+- Download the matching Linux Electron runtime corresponding to the detected version;
+- Copy the core WorkBuddy application payload (`app.asar` and `app.asar.unpacked`) to the `resources/` directory;
+- Rebuild native Node modules for Linux system and Electron environment using `@electron/rebuild`;
+- Install `@lydell/node-pty` Linux platform prebuilt packages to support the built-in CLI;
+- Update Linux platform-adapted dependencies such as `@vscode/ripgrep`;
+- Automatically generate Linux system launcher and desktop entry files;
+- Generate compatible `.deb`, `.rpm` or `.pkg.tar.zst` packages based on the current Linux distribution.
+
+> No auto-update feature is integrated in this project. To update the software, simply manually download the latest official DMG, place it in the `downloads/` directory, and re-run the build and installation process to overwrite the old version.
+
+## Quick Start
+
+1. Clone this repository to your local Linux machine;
+2. Create a `downloads` folder in the project root directory;
+3. Place **exactly one** official Intel/x64 DMG installer into the `downloads/` directory;
+4. Execute the following commands in sequence:
+
+```bash
+bash scripts/install-deps.sh
+make build-app
+make package
+make install
+```
+
+The `scripts/install-deps.sh` script automatically detects the package manager of the current system (supports `apt`, `dnf5`, `dnf`, `pacman`, `zypper`) and installs all dependencies required for DMG extraction, Electron runtime download, native module rebuilding and package generation.
+
+## Build & Run
+
+### Recommended Build Method
+
+After placing the only `.dmg` file in the `downloads/` directory, run the build command directly:
+
+```bash
+make build-app
+```
+
+### Custom DMG Path
+
+You can also manually specify the path of the official DMG file (only an input path, not binding to a specific software version):
+
+```bash
+make build-app DMG=/path/to/WorkBuddy.dmg
+```
+
+### Run the Generated Application
+
+```bash
+make run-app
+```
+
+### Package & Install
+
+Automatically generate a distribution-compatible package and complete local installation:
+
+```bash
+make package
+make install
+```
+
+## How It Works
+
+This project references the local conversion and packaging logic of `codebuddy-ide-cn-linux` (a successful porting case by the same author), but **does not port its auto-update module**. The core workflow is as follows:
+
+1. Take the official macOS DMG installer provided by the user as the input source;
+2. Only extract the core Electron application payload without redistributing any official software content;
+3. Replace the original macOS Electron runtime with the corresponding Linux Electron runtime;
+4. **Recompile Native Modules from Source**: Pre-packaged native modules (e.g., `node-pty`, `better-sqlite3`) in the macOS DMG cannot be used directly on Linux. This tool automatically downloads full source from npm for the exact versions needed, recompiles them into Linux ELF binaries against the Linux Electron headers in an isolated directory, and replaces the original modules;
+5. Install Linux platform-specific prebuilt packages (e.g., `@lydell/node-pty-linux-x64`) to support the built-in terminal CLI;
+6. Update platform-specific binary dependencies adapted for Linux;
+7. Generate Linux system startup configuration and package metadata locally;
+8. Compile a native package for the current distribution and install the latest version via `make install`.
+
+WorkBuddy is developed based on VS Code/Electron. Its macOS application's `app.asar` file contains the cross-platform JavaScript core code, while the `app.asar.unpacked` directory contains native modules. Linux compatibility can be achieved by replacing platform binaries and recompiling native modules.
+
+## Known Limitations after Porting
+
+Due to upstream packaging characteristics and the presence of closed-source commercial components, the ported Linux version has the following two expected functional degradations (which do not affect the core development experience):
+
+1. **Tencent Docs Engine Unavailable**: The bundled `@tencent/docs-engine` in the official DMG only provides a proprietary binary library (`.dylib`) for the macOS Arm64 architecture. Linux cannot run such files and there is no source code available for recompilation. To prevent the main process from crashing due to underlying `dlopen invalid ELF header` errors, the conversion script has forcibly removed it. **Impact**: Any deeply integrated Tencent Docs collaborative editing features within the app will be unavailable. This does not affect the AI assistant or local code editing.
+2. **AI Code Sandbox Degradation**: The built-in CLI tool `vendor/sandbox` is Tencent's proprietary code isolation engine (Tencent Sandbox), which uses precompiled isolation libraries formatted for Windows and macOS. Lacking a Linux sandbox core, the script has cleaned up these irrelevant platform binaries. **Impact**: When the AI assistant attempts to automatically execute code, it will either fall back to executing in a real terminal without a sandbox due to the missing sandbox module, or it will refuse to execute automated scripts, prompting that a secure environment is unavailable.
+
+## Useful Custom Configurations
+
+To customize the installation path or switch Electron mirrors, execute the following commands:
+
+```bash
+# Custom installation directory
+WORKBUDDY_INSTALL_DIR=/opt/tmp/workbuddy-app bash install.sh
+# Switch Electron mirror source
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ bash install.sh
+# Custom Electron headers download URL
+ELECTRON_HEADERS_URL=https://artifacts.electronjs.org/headers/dist bash install.sh
+```
+
+## Repository Maintenance Rules
+
+The following directories are ignored by Git because they store upstream software and generated package files, **never commit them manually**:
+
+- `downloads/`
+- `build/`
+- `workbuddy-app/`
+- `dist/`
+- `reference/`
+
+Committing DMG installers, extracted `.app` bundles, generated Linux application directories and various native package artifacts is prohibited.
+
+## Disclaimer
+
+This project is an **unofficial community open-source tool** and has no affiliation with Tencent. WorkBuddy is a product of Tencent (copyright © 2026 Tencent Cloud Computing (Beijing) Co., Ltd. and Tencent Technology (Shenzhen) Co., Ltd. All rights reserved). This tool does not redistribute any official WorkBuddy software; it only automates the format conversion process for users' genuine installers.
+
+By using this tool, you acknowledge and agree to the following:
+
+1. **User Responsibility**: You are responsible for ensuring that the DMG installer you obtained is from a legitimate source and that your usage complies with WorkBuddy's End User License Agreement (EULA) and related terms of service.
+2. **No Warranty**: This tool is provided "AS IS" without any express or implied warranties, including but not limited to warranties of merchantability, fitness for a particular purpose, and non-infringement.
+3. **No Official Support**: This project is an independent community project. Tencent does not provide any technical support for this tool. For issues encountered in the Linux porting environment, please file an Issue in this repository. **Do not report to official customer service.**
+4. **Use at Your Own Risk**: All consequences arising from using this tool for format conversion and running the application are borne solely by the user.
+5. **Trademark Notice**: WorkBuddy, CodeBuddy, and related logos are trademarks or registered trademarks of Tencent. The use of these names in this project is for descriptive purposes only and does not imply any official endorsement or authorization.
+
+## License
+
+This project is licensed under the MIT License. For details, please refer to the [LICENSE](LICENSE) file.
