@@ -96,12 +96,11 @@ WorkBuddy 基于 VS Code/Electron 开发，其 macOS 应用的 `app.asar` 文件
 
 ## 移植后的已知限制
 
-由于上游打包特性的限制以及闭源商业组件的存在，移植后的 Linux 版本存在以下两点预期内的功能降级（不影响核心开发体验）：
+由于上游打包特性的限制以及闭源商业组件的存在，移植后的 Linux 版本存在以下预期内的功能降级（不影响核心开发体验）：
 
 1. **腾讯文档引擎失效**：官方 DMG 包内捆绑的 `@tencent/docs-engine` 仅提供了 macOS Arm64 架构的专有二进制库（`.dylib`）。Linux 无法运行此类文件且无源码可供重新编译，为防止底层引发 `dlopen invalid ELF header` 导致的主进程崩溃，转换脚本已将其强制移除。**影响**：应用内如果包含深度整合的腾讯文档协同编辑功能将不可用，不影响 AI 助手和本地代码编辑。
 2. **AI 代码沙盒降级**：内置 CLI 工具 `vendor/sandbox` 是腾讯内部私有的代码沙盒引擎（Tencent Sandbox），使用的是包含 Windows 和 macOS 格式的预编译隔离库。由于缺少 Linux 版沙盒核心，脚本已清理无关平台的二进制文件。**影响**：当 AI 助手尝试全自动执行代码时，会因为沙盒模块缺失而回退到无沙盒的真实终端中执行，或者提示安全环境不可用而拒绝执行自动化脚本。
-3. **插件市场更新与 CLI 预加热失败（E2BIG）**：应用在启动 sidecar/plugin 子进程时，会将完整的产品配置序列化为 `ACC_PRODUCT_CONFIG_V3` 环境变量（约 260KB）传递给子进程，超过 Linux `ARG_MAX` 限制导致 `E2BIG` 错误，子进程无法启动。**影响**：插件市场更新和 CLI 沙盒预加热功能不可用，但不影响主窗口和 AI 助手核心功能。**计划修复**：将配置传递方式从环境变量改为临时文件。
-4. **Chromium 子进程启动失败（Network Service 崩溃）**：由于上述 E2BIG 问题，Chromium 通过 `/proc/self/exe` 派生的 Network Service 子进程同样因环境变量过大而启动失败。当前启动器已添加 `--in-process-gpu` 标志将 GPU 进程移至主进程内运行，网络功能通过 in-process fallback 基本可用。**影响**：部分网络子进程功能可能不稳定。修复 E2BIG 后此问题有望一并解决。
+3. **插件市场更新失败（E2BIG）**：应用在启动 sidecar 子进程时，会将完整的产品配置序列化为 `ACC_PRODUCT_CONFIG_V3` 环境变量（约 260KB）传递给子进程，超过 Linux `ARG_MAX` 限制导致 `E2BIG` 错误，子进程无法启动。**影响**：插件市场更新不可用，但不影响主窗口和 AI 助手核心功能。**计划修复**：将配置传递方式从环境变量改为临时文件。
 
 ## 常用自定义配置
 
@@ -238,12 +237,11 @@ WorkBuddy is developed based on VS Code/Electron. Its macOS application's `app.a
 
 ## Known Limitations after Porting
 
-Due to upstream packaging characteristics and the presence of closed-source commercial components, the ported Linux version has the following two expected functional degradations (which do not affect the core development experience):
+Due to upstream packaging characteristics and the presence of closed-source commercial components, the ported Linux version has the following expected functional degradations (which do not affect the core development experience):
 
 1. **Tencent Docs Engine Unavailable**: The bundled `@tencent/docs-engine` in the official DMG only provides a proprietary binary library (`.dylib`) for the macOS Arm64 architecture. Linux cannot run such files and there is no source code available for recompilation. To prevent the main process from crashing due to underlying `dlopen invalid ELF header` errors, the conversion script has forcibly removed it. **Impact**: Any deeply integrated Tencent Docs collaborative editing features within the app will be unavailable. This does not affect the AI assistant or local code editing.
 2. **AI Code Sandbox Degradation**: The built-in CLI tool `vendor/sandbox` is Tencent's proprietary code isolation engine (Tencent Sandbox), which uses precompiled isolation libraries formatted for Windows and macOS. Lacking a Linux sandbox core, the script has cleaned up these irrelevant platform binaries. **Impact**: When the AI assistant attempts to automatically execute code, it will either fall back to executing in a real terminal without a sandbox due to the missing sandbox module, or it will refuse to execute automated scripts, prompting that a secure environment is unavailable.
-3. **Plugin Marketplace Update & CLI Preheat Failure (E2BIG)**: When spawning sidecar/plugin subprocesses, the app serializes the full product configuration into the `ACC_PRODUCT_CONFIG_V3` environment variable (~260KB), which exceeds the Linux `ARG_MAX` limit and triggers an `E2BIG` error, preventing subprocess launch. **Impact**: Plugin marketplace updates and CLI sandbox preheating are unavailable, but the main window and core AI assistant features work fine. **Planned Fix**: Change the configuration passing mechanism from environment variables to temporary files.
-4. **Chromium Subprocess Launch Failure (Network Service Crash)**: Due to the E2BIG issue above, Chromium's Network Service subprocess spawned via `/proc/self/exe` also fails to launch because the environment is too large. The launcher currently includes `--in-process-gpu` to run the GPU process in-process, and network functionality works via in-process fallback. **Impact**: Some network subprocess features may be unstable. Fixing the E2BIG issue is expected to resolve this as well.
+3. **Plugin Marketplace Update Failure (E2BIG)**: When spawning sidecar subprocesses, the app serializes the full product configuration into the `ACC_PRODUCT_CONFIG_V3` environment variable (~260KB), which exceeds the Linux `ARG_MAX` limit and triggers an `E2BIG` error, preventing subprocess launch. **Impact**: Plugin marketplace updates are unavailable, but the main window and core AI assistant features work fine. **Planned Fix**: Change the configuration passing mechanism from environment variables to temporary files.
 
 ## Useful Custom Configurations
 
