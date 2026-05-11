@@ -402,6 +402,46 @@ install_linux_platform_packages() {
         install_lydell_node_pty_linux "$app_dir/cli"
     fi
 
+    # Ensure @lydell/node-pty-linux-x64 is also in the top-level node_modules
+    # even if @lydell/node-pty main package lives inside app.asar (packed).
+    # The sidecar process requires it from within the asar, and the patch
+    # script registers it as an unpacked entry during repack.
+    local linux_pkg="$app_dir/node_modules/@lydell/node-pty-linux-x64"
+    if [ ! -d "$linux_pkg" ]; then
+        # Try to copy from cli/node_modules if available
+        local cli_pkg="$app_dir/cli/node_modules/@lydell/node-pty-linux-x64"
+        if [ -d "$cli_pkg" ]; then
+            mkdir -p "$(dirname "$linux_pkg")"
+            cp -a "$cli_pkg" "$linux_pkg"
+            info "  Copied @lydell/node-pty-linux-x64 from cli/ to top-level node_modules"
+        else
+            # Install fresh from npm
+            local version="1.2.0-beta.12"
+            local pkg_name
+            case "$ARCH" in
+                x86_64) pkg_name="@lydell/node-pty-linux-x64" ;;
+                aarch64) pkg_name="@lydell/node-pty-linux-arm64" ;;
+                *) pkg_name="" ;;
+            esac
+            if [ -n "$pkg_name" ]; then
+                local build_dir="$WORK_DIR/lydell-pty-toplevel"
+                rm -rf "$build_dir"
+                mkdir -p "$build_dir"
+                (
+                    cd "$build_dir"
+                    npm init -y >/dev/null 2>&1
+                    npm install "$pkg_name@$version" --no-audit --no-fund 2>&1
+                ) || true
+                local src_path="$build_dir/node_modules/$pkg_name"
+                if [ -d "$src_path" ]; then
+                    mkdir -p "$(dirname "$linux_pkg")"
+                    cp -a "$src_path" "$linux_pkg"
+                    info "  Installed $pkg_name@$version to top-level node_modules"
+                fi
+            fi
+        fi
+    fi
+
     # Install Linux ripgrep for CLI vendor
     install_cli_ripgrep_linux "$app_dir"
 }
