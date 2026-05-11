@@ -31,7 +31,7 @@
 #   and shipped inside the generated .deb/.rpm/.pkg.tar.zst under
 #   /opt/<app>/.workbuddy-linux/).
 
-LINUX_PATCHES_SHIM_MARKER="__WB_LINUX_PATCHES_V3__"
+LINUX_PATCHES_SHIM_MARKER="__WB_LINUX_PATCHES_V5__"
 
 apply_linux_runtime_patches() {
     local app_dir="$1"

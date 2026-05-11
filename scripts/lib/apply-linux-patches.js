@@ -376,8 +376,96 @@ if (source.includes(marker)) {
     }
 
     // -----------------------------------------------------------------------
-    // Fix 4 (Linux): disable the "Check for Updates..." menu item and
-    // stub out the updateCheck / updateDownload / updateQuitAndInstall
+    // Fix 5 (Linux): add window control buttons (minimize/maximize/close).
+    //
+    // Upstream sets `frame: false` on Linux without providing a
+    // titleBarOverlay (Windows gets one, macOS uses traffic lights).
+    // Electron's titleBarOverlay only works on Wayland, not X11.
+    // We inject a small CSS+JS snippet after the renderer loads that
+    // draws minimize/maximize/close buttons in the top-right corner,
+    // wired to the existing window:minimize/maximize/close RPC channels
+    // exposed via the preload script.
+    // -----------------------------------------------------------------------
+    const linuxFrameMarker = '...!isMac && !isWindows && { frame: false }';
+    const linuxFrameIdx = source.indexOf(linuxFrameMarker);
+    // Keep frame: false (we draw our own buttons), but remove the
+    // titleBarOverlay we added earlier since it doesn't work on X11.
+    // (No change needed — the marker is already just { frame: false })
+
+    // Inject window control buttons after ready-to-show
+    const readyToShowMarker = 'windowLog.info("[WindowManager] Window ready to show");';
+    const readyToShowIdx = source.indexOf(readyToShowMarker);
+    if (readyToShowIdx >= 0) {
+        const afterReady = readyToShowIdx + readyToShowMarker.length;
+        const windowControlsInjection = `
+                        // [wb-linux-patch] Inject window control buttons on Linux
+                        if (process.platform === "linux" && this.mainWindow) {
+                                this.mainWindow.webContents.once("did-finish-load", () => {
+                                        this.mainWindow?.webContents.executeJavaScript(\`
+                                                (function() {
+                                                        if (document.getElementById('wb-linux-window-controls')) return;
+                                                        var css = document.createElement('style');
+                                                        css.textContent = \\\`
+                                                                #wb-linux-window-controls {
+                                                                        position: fixed;
+                                                                        top: 0;
+                                                                        right: 0;
+                                                                        z-index: 99999;
+                                                                        display: flex;
+                                                                        height: 36px;
+                                                                        -webkit-app-region: no-drag;
+                                                                }
+                                                                #wb-linux-window-controls button {
+                                                                        width: 46px;
+                                                                        height: 36px;
+                                                                        border: none;
+                                                                        background: transparent;
+                                                                        color: var(--vscode-titleBar-activeForeground, #cccccc);
+                                                                        font-size: 16px;
+                                                                        cursor: pointer;
+                                                                        display: flex;
+                                                                        align-items: center;
+                                                                        justify-content: center;
+                                                                        transition: background 0.1s;
+                                                                }
+                                                                #wb-linux-window-controls button:hover {
+                                                                        background: rgba(255,255,255,0.1);
+                                                                }
+                                                                #wb-linux-window-controls button.wb-close:hover {
+                                                                        background: #e81123;
+                                                                        color: white;
+                                                                }
+                                                                #wb-linux-window-controls button svg {
+                                                                        width: 10px;
+                                                                        height: 10px;
+                                                                        fill: currentColor;
+                                                                }
+                                                        \\\`;
+                                                        document.head.appendChild(css);
+                                                        var container = document.createElement('div');
+                                                        container.id = 'wb-linux-window-controls';
+                                                        container.innerHTML = '<button class="wb-minimize" title="最小化"><svg viewBox="0 0 10 1"><rect width="10" height="1"/></svg></button>'
+                                                                + '<button class="wb-maximize" title="最大化"><svg viewBox="0 0 10 10"><path d="M0 0v10h10V0H0zm1 1h8v8H1V1z"/></svg></button>'
+                                                                + '<button class="wb-close" title="关闭"><svg viewBox="0 0 10 10"><path d="M1.41 0L5 3.59 8.59 0 10 1.41 6.41 5 10 8.59 8.59 10 5 6.41 1.41 10 0 8.59 3.59 5 0 1.41z"/></svg></button>';
+                                                        document.body.appendChild(container);
+                                                        container.querySelector('.wb-minimize').onclick = function() {
+                                                                window.buddyAPI && window.buddyAPI.minimizeWindow && window.buddyAPI.minimizeWindow();
+                                                        };
+                                                        container.querySelector('.wb-maximize').onclick = function() {
+                                                                window.buddyAPI && window.buddyAPI.maximizeWindow && window.buddyAPI.maximizeWindow();
+                                                        };
+                                                        container.querySelector('.wb-close').onclick = function() {
+                                                                window.buddyAPI && window.buddyAPI.closeWindow && window.buddyAPI.closeWindow();
+                                                        };
+                                                })();
+                                        \`).catch(function() {});
+                                });
+                        }`;
+        source = source.slice(0, afterReady) + windowControlsInjection + source.slice(afterReady);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fix 6 (Linux): disable the "Check for Updates..." menu item and    // stub out the updateCheck / updateDownload / updateQuitAndInstall
     // RPCs. The upstream updater talks to the macOS ShipIt / Windows
     // Squirrel / NSIS installers which are not available on Linux, and
     // the downloaded payloads (.dmg / .exe) cannot be applied here. We
