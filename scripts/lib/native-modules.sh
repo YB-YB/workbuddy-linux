@@ -358,8 +358,15 @@ install_cli_ripgrep_linux() {
         return 0
     }
 
-    # @vscode/ripgrep installs rg binary in node_modules/@vscode/ripgrep/bin/
-    local rg_bin="$build_dir/node_modules/@vscode/ripgrep/bin/rg"
+    # @vscode/ripgrep >= 1.14 installs binary in an architecture-specific sub-package
+    local rg_bin
+    rg_bin="$(node -e "try { console.log(require('$build_dir/node_modules/@vscode/ripgrep').rgPath) } catch(e) {}" 2>/dev/null)"
+    
+    # Fallback if that failed
+    if [ -z "$rg_bin" ] || [ ! -x "$rg_bin" ]; then
+        rg_bin="$build_dir/node_modules/@vscode/ripgrep/bin/rg"
+    fi
+
     if [ -x "$rg_bin" ]; then
         mkdir -p "$ripgrep_vendor/$linux_dir"
         cp "$rg_bin" "$ripgrep_vendor/$linux_dir/rg"

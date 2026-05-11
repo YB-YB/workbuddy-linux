@@ -62,6 +62,10 @@ SCRIPT
   if [ -f "$source_root/.workbuddy-linux/workbuddy.png" ]; then
     install -m 0644 "$source_root/.workbuddy-linux/workbuddy.png" "\$pkgdir/usr/share/icons/hicolor/256x256/apps/workbuddy.png"
   fi
+  # Set SUID bit on chrome-sandbox so Chromium can spawn child processes
+  if [ -f "\$pkgdir/opt/$PACKAGE_NAME/chrome-sandbox" ]; then
+    chmod 4755 "\$pkgdir/opt/$PACKAGE_NAME/chrome-sandbox"
+  fi
 }
 EOF
 

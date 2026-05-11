@@ -160,6 +160,7 @@ exec "\$APP_DIR/electron" \\
   --no-sandbox \\
   --disable-dev-shm-usage \\
   --disable-gpu-sandbox \\
+  --in-process-gpu \\
   --ozone-platform-hint=auto \\
   --enable-wayland-ime \\
   "\$@"

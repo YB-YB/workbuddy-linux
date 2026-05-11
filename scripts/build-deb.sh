@@ -40,6 +40,11 @@ main() {
 
     cp -a "$APP_DIR/." "$PKG_ROOT/opt/$PACKAGE_NAME/"
 
+    # Set SUID bit on chrome-sandbox so Chromium can spawn child processes
+    if [ -f "$PKG_ROOT/opt/$PACKAGE_NAME/chrome-sandbox" ]; then
+        chmod 4755 "$PKG_ROOT/opt/$PACKAGE_NAME/chrome-sandbox"
+    fi
+
     cat > "$PKG_ROOT/usr/bin/$PACKAGE_NAME" <<EOF
 #!/bin/bash
 exec /opt/$PACKAGE_NAME/start.sh "\$@"

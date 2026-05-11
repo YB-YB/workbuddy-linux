@@ -69,6 +69,23 @@ workbuddy --verbose
 ./workbuddy-app/start.sh --verbose
 ```
 
+如果 UI 无法打开（无窗口弹出），通常是 GPU 子进程启动失败导致。
+启动器已默认添加 `--in-process-gpu` 标志，将 GPU 进程移至主进程内运行。
+如需单独调试 GPU 问题，可移除该标志并用以下方式排查：
+
+```bash
+# 检查 GPU 子进程是否可以正常启动
+./workbuddy-app/start.sh --verbose 2>&1 | grep -i "LaunchProcess\|execvp\|GPU"
+```
+
+如果安装后的版本 GPU 子进程启动失败，确认 `chrome-sandbox` 具有 SUID 权限：
+
+```bash
+ls -la /opt/workbuddy/chrome-sandbox
+# 应显示 -rwsr-xr-x root:root
+# 如权限不对，修复：sudo chmod 4755 /opt/workbuddy/chrome-sandbox && sudo chown root:root /opt/workbuddy/chrome-sandbox
+```
+
 如果 UI 能打开，但终端或文件监听失败，请检查：
 
 ```bash
@@ -152,6 +169,23 @@ You can also run the generated app before installing it:
 
 ```bash
 ./workbuddy-app/start.sh --verbose
+```
+
+If the UI fails to open (no window appears), it is usually caused by GPU subprocess launch failure.
+The launcher includes `--in-process-gpu` by default, which runs the GPU process in the main process.
+To debug GPU issues separately, remove that flag and check:
+
+```bash
+# Check if GPU subprocess can start
+./workbuddy-app/start.sh --verbose 2>&1 | grep -i "LaunchProcess\|execvp\|GPU"
+```
+
+If the installed version has GPU subprocess launch failures, verify `chrome-sandbox` has SUID permissions:
+
+```bash
+ls -la /opt/workbuddy/chrome-sandbox
+# Should show -rwsr-xr-x root:root
+# If permissions are wrong, fix with: sudo chmod 4755 /opt/workbuddy/chrome-sandbox && sudo chown root:root /opt/workbuddy/chrome-sandbox
 ```
 
 If the UI opens but terminal or file watching fails, inspect:
