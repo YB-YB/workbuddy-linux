@@ -266,6 +266,27 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray)
     }
     wrapSpawnLike("spawn");
     wrapSpawnLike("spawnSync");
+    wrapSpawnLike("execFile");
+    wrapSpawnLike("execFileSync");
+
+    // exec/execSync use shell and pass env via options too
+    function wrapExecLike(name) {
+      var orig = cp[name];
+      if (typeof orig !== "function" || orig.__wbLinuxShimWrapped) return;
+      function wrapped(command, options, callback) {
+        if (typeof options === "function") {
+          callback = options;
+          options = undefined;
+        }
+        var patched = spillOversizedEnv(options);
+        if (callback) return orig.call(cp, command, patched, callback);
+        return orig.call(cp, command, patched);
+      }
+      wrapped.__wbLinuxShimWrapped = true;
+      try { cp[name] = wrapped; } catch (_) {}
+    }
+    wrapExecLike("exec");
+    wrapExecLike("execSync");
 
     // ---------------------------------------------------------------
     // Part C: receiver side.
@@ -275,6 +296,11 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray)
     // and re-expose the original value on process.env through the
     // same Proxy. The file is deleted after a single read so we
     // don't leave the JSON lying around any longer than necessary.
+    //
+    // Additionally, we write a fresh _FILE pointer into the real env
+    // so that any child processes we spawn (which inherit process.env
+    // via the default behavior) can also pick up the value through
+    // their own copy of this shim.
     // ---------------------------------------------------------------
     for (var j = 0; j < SPILL_KEYS.length; j++) {
       var rkey = SPILL_KEYS[j];
@@ -283,13 +309,33 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray)
       if (typeof fp === "string" && fp.length) {
         try {
           store[rkey] = fsMod.readFileSync(fp, "utf8");
-          try { fsMod.unlinkSync(fp); } catch (_) {}
+          // Don't delete the file — child processes may also need it.
+          // Instead, keep the _FILE pointer in the real env so children
+          // that inherit process.env can read it too.
         } catch (err) {
           try {
             console.error("[wb-linux-shim] failed to read " + fkey + ":", err);
           } catch (_) {}
         }
-        try { delete real[fkey]; } catch (_) {}
+      }
+    }
+
+    // If we have values in store (either from parent's _FILE or from
+    // upstream code setting them via the Proxy), ensure a _FILE pointer
+    // exists in the real env for child process inheritance.
+    for (var k = 0; k < SPILL_KEYS.length; k++) {
+      var skey = SPILL_KEYS[k];
+      var sfkey = skey + "_FILE";
+      if (store[skey] && typeof store[skey] === "string" && store[skey].length >= SPILL_THRESHOLD) {
+        if (!real[sfkey]) {
+          try {
+            var sdir = pathMod.join(osMod.tmpdir(), "workbuddy-linux-env-" + process.pid);
+            fsMod.mkdirSync(sdir, { recursive: true, mode: 0o700 });
+            var sfp = pathMod.join(sdir, skey + ".json");
+            fsMod.writeFileSync(sfp, store[skey], { mode: 0o600 });
+            real[sfkey] = sfp;
+          } catch (_) {}
+        }
       }
     }
 
@@ -313,6 +359,55 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray)
           Module.globalPaths.push(unpackedNM);
         }
       }
+    } catch (_) {}
+
+    // ---------------------------------------------------------------
+    // Part E: wrap @lydell/node-pty spawn to spill oversized env.
+    //
+    // The sidecar uses node-pty (not child_process) to spawn the
+    // host runtime CLI. node-pty calls forkpty+execve directly in
+    // C++, bypassing our child_process monkey-patch. We intercept
+    // the JS-level spawn() of the loaded node-pty module to strip
+    // oversized env entries before they reach the native layer.
+    // ---------------------------------------------------------------
+    try {
+      var origRequire = Module.prototype.require;
+      var ptyPatched = false;
+      Module.prototype.require = function wbRequireHook() {
+        var result = origRequire.apply(this, arguments);
+        var modName = arguments[0];
+        if (!ptyPatched && typeof modName === "string" &&
+            (modName === "@lydell/node-pty" || modName === "@lydell/node-pty-linux-x64" || modName === "node-pty") &&
+            result && typeof result.spawn === "function" && !result.spawn.__wbPtyWrapped) {
+          ptyPatched = true;
+          var origSpawn = result.spawn;
+          result.spawn = function wbPtySpawn(file, args, opts) {
+            if (opts && opts.env && typeof opts.env === "object") {
+              var patchedEnv = opts.env;
+              var didPatch = false;
+              for (var pi = 0; pi < SPILL_KEYS.length; pi++) {
+                var pk = SPILL_KEYS[pi];
+                var pv = patchedEnv[pk];
+                if (typeof pv === "string" && pv.length >= SPILL_THRESHOLD) {
+                  try {
+                    var pdir = pathMod.join(osMod.tmpdir(), "workbuddy-linux-env-" + process.pid);
+                    fsMod.mkdirSync(pdir, { recursive: true, mode: 0o700 });
+                    var pfp = pathMod.join(pdir, pk + "-pty.json");
+                    fsMod.writeFileSync(pfp, pv, { mode: 0o600 });
+                    if (!didPatch) { patchedEnv = Object.assign({}, patchedEnv); didPatch = true; }
+                    delete patchedEnv[pk];
+                    patchedEnv[pk + "_FILE"] = pfp;
+                  } catch (_) {}
+                }
+              }
+              if (didPatch) opts = Object.assign({}, opts, { env: patchedEnv });
+            }
+            return origSpawn.call(this, file, args, opts);
+          };
+          result.spawn.__wbPtyWrapped = true;
+        }
+        return result;
+      };
     } catch (_) {}
   } catch (err) {
     try { console.error("[wb-linux-shim] install failed:", err); } catch (_) {}
