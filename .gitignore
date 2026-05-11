@@ -27,6 +27,15 @@ node_modules/
 *.tmp
 *.part
 
+# Local-only helper trees used during debugging / repacking.
+# Never commit: these may contain extracted upstream payloads.
+.asar-extract/
+.asar-tool/
+.test-repack.asar
+.test-repack.asar.unpacked/
+.tmp-asar-tool.js
+.tmp-asar-repack.js
+
 # OS/editor noise.
 .DS_Store
 Thumbs.db

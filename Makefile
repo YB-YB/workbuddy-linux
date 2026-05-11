@@ -45,3 +45,5 @@ check:
 
 clean:
 	rm -rf workbuddy-app workbuddy-app-next dist dist-next
+	rm -rf .asar-tool .asar-extract .test-repack.asar .test-repack.asar.unpacked
+	rm -f .tmp-asar-tool.js .tmp-asar-repack.js

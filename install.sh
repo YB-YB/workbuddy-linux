@@ -17,6 +17,7 @@ FRESH=0
 . "$SCRIPT_DIR/scripts/lib/dmg.sh"
 . "$SCRIPT_DIR/scripts/lib/electron.sh"
 . "$SCRIPT_DIR/scripts/lib/native-modules.sh"
+. "$SCRIPT_DIR/scripts/lib/linux-patches.sh"
 
 usage() {
     cat <<'HELP'
@@ -228,6 +229,10 @@ main() {
     elif [ -d "$INSTALL_DIR/resources/app/node_modules" ]; then
         rebuild_native_modules "$INSTALL_DIR/resources/app"
     fi
+
+    # Apply Linux-specific runtime patches inside app.asar so the main
+    # window actually opens and the tray right-click menu is populated.
+    apply_linux_runtime_patches "$INSTALL_DIR"
 
     write_icon "$app_bundle"
     write_launcher

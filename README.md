@@ -100,7 +100,21 @@ WorkBuddy 基于 VS Code/Electron 开发，其 macOS 应用的 `app.asar` 文件
 
 1. **腾讯文档引擎失效**：官方 DMG 包内捆绑的 `@tencent/docs-engine` 仅提供了 macOS Arm64 架构的专有二进制库（`.dylib`）。Linux 无法运行此类文件且无源码可供重新编译，为防止底层引发 `dlopen invalid ELF header` 导致的主进程崩溃，转换脚本已将其强制移除。**影响**：应用内如果包含深度整合的腾讯文档协同编辑功能将不可用，不影响 AI 助手和本地代码编辑。
 2. **AI 代码沙盒降级**：内置 CLI 工具 `vendor/sandbox` 是腾讯内部私有的代码沙盒引擎（Tencent Sandbox），使用的是包含 Windows 和 macOS 格式的预编译隔离库。由于缺少 Linux 版沙盒核心，脚本已清理无关平台的二进制文件。**影响**：当 AI 助手尝试全自动执行代码时，会因为沙盒模块缺失而回退到无沙盒的真实终端中执行，或者提示安全环境不可用而拒绝执行自动化脚本。
-3. **插件市场更新失败（E2BIG）**：应用在启动 sidecar 子进程时，会将完整的产品配置序列化为 `ACC_PRODUCT_CONFIG_V3` 环境变量（约 260KB）传递给子进程，超过 Linux `ARG_MAX` 限制导致 `E2BIG` 错误，子进程无法启动。**影响**：插件市场更新不可用，但不影响主窗口和 AI 助手核心功能。**计划修复**：将配置传递方式从环境变量改为临时文件。
+3. **自动更新不可用**：Linux 移植版已禁用应用内的"检查更新"功能（菜单项灰化、后台自动检查已关闭）。上游更新器依赖 macOS ShipIt / Windows Squirrel 安装器，在 Linux 上无法使用。如需更新，请手动下载新版官方 DMG 并重新执行构建流程。
+
+## 移植过程中已修复的问题
+
+以下问题在移植过程中已通过 Linux 运行时补丁（`scripts/lib/apply-linux-patches.js`）修复：
+
+1. **主窗口无法弹出（E2BIG）**：上游代码将 ~260KB 的产品配置 JSON 写入 `process.env.ACC_PRODUCT_CONFIG_V3`，超过 Linux `MAX_ARG_STRLEN`（128KB/条）限制，导致 Chromium 网络服务/GPU/Utility 子进程全部 spawn 失败，渲染进程无法启动。**修复方式**：用 Proxy 替换 `process.env`，将超大 key 隐藏在 JS 私有 slot 中，libc environ 保持小体积。
+2. **托盘右键菜单为空**：Linux 的 AppIndicator 后端不触发 `click`/`right-click` 事件，只显示通过 `tray.setContextMenu()` 附加的菜单。**修复方式**：在 Linux 下额外调用 `this.tray.setContextMenu(contextMenu)`。
+3. **托盘图标显示为感叹号**：上游把图片 resize 成内存 NativeImage 传给 Tray，AppIndicator 无法正确渲染。**修复方式**：Linux 下直接用磁盘上的 `.workbuddy-linux/workbuddy.png` 路径构造 Tray。
+4. **Sidecar 子进程 spawn 失败（E2BIG）**：`buildCliEnv()` 显式把 260KB 字符串塞进 spawn 的 env 对象。**修复方式**：Monkey-patch `child_process.spawn/spawnSync`，超过 100KB 的 env 条目自动 spill 到临时文件，子进程启动时从文件读回并通过 Proxy 恢复。
+5. **`@lydell/node-pty-linux-x64` 找不到**：原 macOS asar 里只有 darwin 平台包。**修复方式**：repack 时将 Linux 平台包注入 asar 并标记为 unpacked。
+
+## 版本适配说明
+
+当前补丁基于官方 WorkBuddy **4.22.10**（构建号 `27634624-ec5e02bd`）验证通过。更高版本的 DMG 可能因为上游代码结构变化导致补丁无法正确应用。如遇到构建失败或运行异常，请在本仓库提 Issue 并附上所使用的 DMG 版本号。
 
 ## 常用自定义配置
 
@@ -241,7 +255,21 @@ Due to upstream packaging characteristics and the presence of closed-source comm
 
 1. **Tencent Docs Engine Unavailable**: The bundled `@tencent/docs-engine` in the official DMG only provides a proprietary binary library (`.dylib`) for the macOS Arm64 architecture. Linux cannot run such files and there is no source code available for recompilation. To prevent the main process from crashing due to underlying `dlopen invalid ELF header` errors, the conversion script has forcibly removed it. **Impact**: Any deeply integrated Tencent Docs collaborative editing features within the app will be unavailable. This does not affect the AI assistant or local code editing.
 2. **AI Code Sandbox Degradation**: The built-in CLI tool `vendor/sandbox` is Tencent's proprietary code isolation engine (Tencent Sandbox), which uses precompiled isolation libraries formatted for Windows and macOS. Lacking a Linux sandbox core, the script has cleaned up these irrelevant platform binaries. **Impact**: When the AI assistant attempts to automatically execute code, it will either fall back to executing in a real terminal without a sandbox due to the missing sandbox module, or it will refuse to execute automated scripts, prompting that a secure environment is unavailable.
-3. **Plugin Marketplace Update Failure (E2BIG)**: When spawning sidecar subprocesses, the app serializes the full product configuration into the `ACC_PRODUCT_CONFIG_V3` environment variable (~260KB), which exceeds the Linux `ARG_MAX` limit and triggers an `E2BIG` error, preventing subprocess launch. **Impact**: Plugin marketplace updates are unavailable, but the main window and core AI assistant features work fine. **Planned Fix**: Change the configuration passing mechanism from environment variables to temporary files.
+3. **Auto-Update Disabled**: The Linux port has disabled the in-app "Check for Updates" feature (menu item greyed out, background auto-check disabled). The upstream updater relies on macOS ShipIt / Windows Squirrel installers which are not available on Linux. To update, manually download the latest official DMG and re-run the build process.
+
+## Issues Fixed During Porting
+
+The following issues have been resolved via Linux runtime patches (`scripts/lib/apply-linux-patches.js`):
+
+1. **Main window fails to appear (E2BIG)**: Upstream writes a ~260KB product configuration JSON into `process.env.ACC_PRODUCT_CONFIG_V3`, exceeding Linux's `MAX_ARG_STRLEN` (128KB per env string) limit, causing all Chromium network/GPU/utility subprocess spawns to fail and preventing the renderer from starting. **Fix**: Replace `process.env` with a Proxy that keeps oversized keys in a private JS slot, hidden from enumeration.
+2. **Tray right-click menu is empty**: Linux's AppIndicator backend never emits `click`/`right-click` events and only displays menus attached via `tray.setContextMenu()`. **Fix**: Call `this.tray.setContextMenu(contextMenu)` on Linux.
+3. **Tray icon shows as exclamation mark**: Upstream passes a resized in-memory NativeImage to Tray, which AppIndicator cannot render. **Fix**: On Linux, construct the Tray from the on-disk `.workbuddy-linux/workbuddy.png` path.
+4. **Sidecar subprocess spawn fails (E2BIG)**: `buildCliEnv()` explicitly puts the 260KB string into the spawn env object. **Fix**: Monkey-patch `child_process.spawn/spawnSync` to spill env entries >100KB to temp files; child processes restore the value from file on startup.
+5. **`@lydell/node-pty-linux-x64` not found**: The original macOS asar only contains darwin platform packages. **Fix**: Inject the Linux platform package into the asar during repack and mark it as unpacked.
+
+## Version Compatibility
+
+The current patches have been verified against official WorkBuddy **4.22.10** (build `27634624-ec5e02bd`). Higher versions of the DMG may have upstream code structure changes that prevent patches from applying correctly. If you encounter build failures or runtime issues, please file an Issue in this repository with the DMG version number you are using.
 
 ## Useful Custom Configurations
 
