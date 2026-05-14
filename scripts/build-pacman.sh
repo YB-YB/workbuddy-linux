@@ -75,7 +75,13 @@ EOF
     )
 
     mkdir -p "$DIST_DIR"
-    cp "$PKG_WORK"/*.pkg.tar.zst "$output_file"
+    # makepkg may produce a split debug package (*-debug-*.pkg.tar.zst) in
+    # addition to the main package.  Pick only the main package to copy out.
+    local built_pkg
+    built_pkg="$(find "$PKG_WORK" -maxdepth 1 -name "${PACKAGE_NAME}-*.pkg.tar.zst" \
+        ! -name "${PACKAGE_NAME}-debug-*.pkg.tar.zst" | head -n 1)"
+    [ -n "$built_pkg" ] || error "makepkg did not produce a package in $PKG_WORK"
+    cp "$built_pkg" "$output_file"
     info "Built package: $output_file"
 }
 
