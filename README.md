@@ -30,12 +30,14 @@
 
 > 项目**未集成自动更新功能**，如需更新软件，只需手动下载新版官方 DMG，放入 `downloads/` 目录后，重新执行构建、安装流程即可覆盖本地旧版本。
 
-## 快速上手
+## 快速安装
+
+本项目**未上架 AUR**，所有 Linux 发行版均需在本地通过本仓库脚本完成构建与安装。
 
 1. 克隆本项目至本地 Linux 机器；
 2. 在项目根目录创建 `downloads` 文件夹；
-3. 将**唯一一份**官方 Intel/x64 架构 DMG 安装包放入 `downloads/` 目录；
-4. 依次执行以下命令：
+3. 自行从官方渠道下载 Intel/x64 架构 DMG 安装包，放入 `downloads/` 目录（仅放**唯一一份**）；
+4. 依次执行：
 
 ```bash
 bash scripts/install-deps.sh
@@ -44,13 +46,15 @@ make package
 make install
 ```
 
-`scripts/install-deps.sh` 脚本会自动识别当前系统的包管理器（支持 `apt`、`dnf5`、`dnf`、`pacman`、`zypper`），并一键安装 DMG 提取、Electron 运行时下载、原生模块重建、安装包生成所需的全部依赖。
+`scripts/install-deps.sh` 会自动识别当前系统的包管理器（支持 `apt`、`dnf5`、`dnf`、`pacman`、`zypper`），一键安装 DMG 提取、Electron 运行时下载、原生模块重建、安装包生成所需的全部依赖。
+
+> 测试范围：已在 Debian 系（Linux Mint 22.3）和 Arch 系（CachyOS）完成完整打包部署实测，运行稳定。
 
 ## 构建与运行
 
 ### 推荐构建方式
 
-将唯一的 `.dmg` 文件放入 `downloads/` 目录后，直接执行构建命令：
+将官方 DMG 文件放入 `downloads/` 目录后，直接执行：
 
 ```bash
 make build-app
@@ -58,7 +62,7 @@ make build-app
 
 ### 自定义 DMG 路径
 
-也可手动指定官方 DMG 文件路径（仅为输入路径，不绑定软件版本）：
+也可手动指定官方 DMG 文件路径：
 
 ```bash
 make build-app DMG=/path/to/WorkBuddy.dmg
@@ -145,6 +149,8 @@ ELECTRON_HEADERS_URL=https://artifacts.electronjs.org/headers/dist bash install.
 
 本项目为**非官方社区开源工具**，与腾讯官方无任何关联。WorkBuddy 是腾讯旗下产品（版权 © 2026 腾讯云计算（北京）有限责任公司丨腾讯科技（深圳）有限公司 版权所有）。本工具不分发任何 WorkBuddy 官方软件，仅自动化实现用户对自有正版安装包的格式转换流程。
 
+使用本工具产生的 WorkBuddy 应用仍受腾讯官方协议约束，请以官网或应用内最新版服务条款、隐私协议为准。
+
 使用本工具即表示您已知悉并同意以下内容：
 
 1. **用户责任**：您有责任确保自行获取的 DMG 安装包来源合法，并遵守 WorkBuddy 的最终用户许可协议（EULA）及相关服务条款。
@@ -152,10 +158,11 @@ ELECTRON_HEADERS_URL=https://artifacts.electronjs.org/headers/dist bash install.
 3. **无官方支持**：本项目是独立社区项目，腾讯官方不对本工具提供任何技术支持。在 Linux 移植环境下遇到的问题，请在本仓库提 Issue，**严禁向官方客服反馈**。
 4. **风险自担**：使用本工具进行格式转换和运行所产生的一切后果，由用户自行承担。
 5. **商标声明**：WorkBuddy、CodeBuddy 及相关标识是腾讯公司的商标或注册商标。本项目使用这些名称仅用于描述性目的，不暗示任何官方认可或授权。
+6. **下架预案**：如腾讯或任何相关权利方对本项目存在异议，请通过本仓库 Issue 或邮件联系维护者。维护者承诺在收到合理异议后立即停止维护，并按权利方要求处理 GitHub 仓库。
 
 ## 开源许可证
 
-本项目采用 MIT 开源许可证，详细内容请查看 [LICENSE](LICENSE) 文件。
+本项目（转换脚本及相关 recipe）采用 MIT 开源许可证，详细内容请查看 [LICENSE](LICENSE) 文件。MIT 许可仅覆盖本仓库中的转换工具，**不延伸到通过本工具安装的腾讯 WorkBuddy 二进制文件**——后者仍受腾讯官方私有协议约束。
 
 ---
 
@@ -185,12 +192,14 @@ The project currently fully implements the core Linux-side conversion and packag
 
 > No auto-update feature is integrated in this project. To update the software, simply manually download the latest official DMG, place it in the `downloads/` directory, and re-run the build and installation process to overwrite the old version.
 
-## Quick Start
+## Quick Install
+
+This project is **not published on the AUR**. All Linux distributions must build and install locally via the scripts in this repository.
 
 1. Clone this repository to your local Linux machine;
-2. Create a `downloads` folder in the project root directory;
-3. Place **exactly one** official Intel/x64 DMG installer into the `downloads/` directory;
-4. Execute the following commands in sequence:
+2. Create a `downloads/` folder in the project root;
+3. Download the official Intel/x64 DMG installer yourself and place it in `downloads/` (place **exactly one** DMG);
+4. Run:
 
 ```bash
 bash scripts/install-deps.sh
@@ -199,13 +208,15 @@ make package
 make install
 ```
 
-The `scripts/install-deps.sh` script automatically detects the package manager of the current system (supports `apt`, `dnf5`, `dnf`, `pacman`, `zypper`) and installs all dependencies required for DMG extraction, Electron runtime download, native module rebuilding and package generation.
+`scripts/install-deps.sh` automatically detects the package manager (`apt`, `dnf5`, `dnf`, `pacman`, `zypper`) and installs all dependencies needed for DMG extraction, Electron runtime download, native module rebuilding and package generation.
+
+> Testing scope: fully tested on Debian-based (Linux Mint 22.3) and Arch-based (CachyOS) systems.
 
 ## Build & Run
 
 ### Recommended Build Method
 
-After placing the only `.dmg` file in the `downloads/` directory, run the build command directly:
+Place the official DMG in `downloads/` and run:
 
 ```bash
 make build-app
@@ -213,7 +224,7 @@ make build-app
 
 ### Custom DMG Path
 
-You can also manually specify the path of the official DMG file (only an input path, not binding to a specific software version):
+You can also manually specify the path of the official DMG file:
 
 ```bash
 make build-app DMG=/path/to/WorkBuddy.dmg
@@ -227,7 +238,7 @@ make run-app
 
 ### Package & Install
 
-Automatically generate a distribution-compatible package and complete local installation:
+Generate a distribution-compatible package and install it locally:
 
 ```bash
 make package
@@ -300,6 +311,8 @@ Committing DMG installers, extracted `.app` bundles, generated Linux application
 
 This project is an **unofficial community open-source tool** and has no affiliation with Tencent. WorkBuddy is a product of Tencent (copyright © 2026 Tencent Cloud Computing (Beijing) Co., Ltd. and Tencent Technology (Shenzhen) Co., Ltd. All rights reserved). This tool does not redistribute any official WorkBuddy software; it only automates the format conversion process for users' genuine installers.
 
+The WorkBuddy application produced by this tool remains governed by Tencent's official agreements; please refer to the latest terms of service and privacy policy on the official website or in the application.
+
 By using this tool, you acknowledge and agree to the following:
 
 1. **User Responsibility**: You are responsible for ensuring that the DMG installer you obtained is from a legitimate source and that your usage complies with WorkBuddy's End User License Agreement (EULA) and related terms of service.
@@ -307,7 +320,8 @@ By using this tool, you acknowledge and agree to the following:
 3. **No Official Support**: This project is an independent community project. Tencent does not provide any technical support for this tool. For issues encountered in the Linux porting environment, please file an Issue in this repository. **Do not report to official customer service.**
 4. **Use at Your Own Risk**: All consequences arising from using this tool for format conversion and running the application are borne solely by the user.
 5. **Trademark Notice**: WorkBuddy, CodeBuddy, and related logos are trademarks or registered trademarks of Tencent. The use of these names in this project is for descriptive purposes only and does not imply any official endorsement or authorization.
+6. **Takedown Policy**: If Tencent or any rights holder objects to this project, please contact the maintainer via a GitHub issue or email. The maintainer commits to immediately suspending maintenance and processing the GitHub repository in accordance with the rights holder's reasonable request upon receipt of such objection.
 
 ## License
 
-This project is licensed under the MIT License. For details, please refer to the [LICENSE](LICENSE) file.
+This project (conversion scripts and related recipes) is licensed under the MIT License; see [LICENSE](LICENSE). The MIT grant covers only the conversion tooling in this repository and **does NOT extend to the Tencent WorkBuddy binaries installed via this tool**, which remain subject to Tencent's proprietary terms.
