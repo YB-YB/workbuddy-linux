@@ -147,7 +147,7 @@ install_apt() {
     info "Detected Debian/Ubuntu (apt)"
     sudo apt-get update -qq
     sudo apt-get install -y \
-        bash ca-certificates curl unzip p7zip-full python3 make g++ pkg-config \
+        bash ca-certificates curl unzip 7zip python3 make g++ pkg-config \
         libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev \
         dpkg-dev fakeroot desktop-file-utils icnsutils imagemagick
     ensure_apt_nodejs
@@ -165,7 +165,7 @@ install_dnf5() {
 install_dnf() {
     info "Detected Fedora/RHEL (dnf)"
     sudo dnf install -y \
-        bash curl unzip p7zip p7zip-plugins python3 nodejs npm make gcc-c++ pkgconf-pkg-config \
+        bash curl unzip 7zip python3 nodejs npm make gcc-c++ pkgconf-pkg-config \
         libX11-devel libxkbfile-devel libsecret-devel krb5-devel \
         rpm-build desktop-file-utils ImageMagick
     ensure_generic_nodejs
@@ -174,7 +174,7 @@ install_dnf() {
 install_pacman() {
     info "Detected Arch Linux (pacman)"
     sudo pacman -S --needed --noconfirm \
-        bash curl unzip p7zip python nodejs npm base-devel zstd fakeroot \
+        bash curl unzip 7zip python nodejs npm base-devel zstd fakeroot \
         libx11 libxkbfile libsecret krb5 desktop-file-utils imagemagick
     ensure_generic_nodejs
 }
@@ -182,7 +182,7 @@ install_pacman() {
 install_zypper() {
     info "Detected openSUSE (zypper)"
     sudo zypper --non-interactive install \
-        bash curl unzip p7zip-full python3 nodejs-default npm-default make gcc-c++ pkg-config \
+        bash curl unzip 7zip python3 nodejs-default npm-default make gcc-c++ pkg-config \
         libX11-devel libxkbfile-devel libsecret-devel krb5-devel \
         rpm-build desktop-file-utils ImageMagick
     ensure_generic_nodejs

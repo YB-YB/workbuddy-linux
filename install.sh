@@ -145,6 +145,40 @@ write_icon() {
         convert "$icon_source" "$icon_target" >/dev/null 2>&1 && return 0
     fi
 
+    # Fallback: extract PNG directly from ICNS with python3 (no extra libs needed).
+    # ICNS 256x256+ entries embed raw PNG data that we can locate by signature.
+    if python3 - "$icon_source" "$icon_target" <<'PY' 2>/dev/null; then
+import struct, sys
+
+def extract(icns_path, out_path):
+    # ICNS entry types containing PNG, ordered by preference
+    wanted = [b'ic08', b'ic09', b'ic13', b'ic14', b'ic10', b'ic07']
+    png_sig = b'\x89PNG'
+    with open(icns_path, 'rb') as f:
+        if f.read(4) != b'icns':
+            return False
+        total = struct.unpack('>I', f.read(4))[0]
+        found = {}
+        while f.tell() < total:
+            etype = f.read(4)
+            if len(etype) < 4:
+                break
+            esize = struct.unpack('>I', f.read(4))[0]
+            edata = f.read(esize - 8)
+            if etype in wanted and edata[:4] == png_sig:
+                found[etype] = edata
+        for t in wanted:
+            if t in found:
+                with open(out_path, 'wb') as o:
+                    o.write(found[t])
+                return True
+    return False
+
+sys.exit(0 if extract(sys.argv[1], sys.argv[2]) else 1)
+PY
+        return 0
+    fi
+
     warn "Could not convert WorkBuddy .icns icon; desktop entry will use theme icon name"
 }
 
