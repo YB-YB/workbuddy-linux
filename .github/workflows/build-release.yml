@@ -164,7 +164,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: WorkBuddy-${{ steps.version.outputs.upstream_version }}
-          path: dist/*
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
       # --------------------------------------------------------------
