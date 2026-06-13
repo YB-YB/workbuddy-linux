@@ -88,6 +88,7 @@ main() {
     # ---------------------------------------------------------------
     info "Copying app payload into AppDir ..."
     cp -a "$APP_DIR/." "$appdir_path/opt/$APP_ID/"
+    sanitize_package_tree "$appdir_path"
 
     # ---------------------------------------------------------------
     # 2. Generate AppRun entry point

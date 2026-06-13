@@ -58,3 +58,9 @@ with open('$build_info') as f:
     fi
     echo "${PACKAGE_VERSION:-$(date -u +%Y.%m.%d.%H%M%S)}"
 }
+
+sanitize_package_tree() {
+    local target_dir="$1"
+    [ -d "$target_dir" ] || return 0
+    find "$target_dir" -depth -name '*:*' -exec rm -rf {} +
+}

@@ -25,64 +25,73 @@ map_arch() {
 
 main() {
     [ -x "$APP_DIR/start.sh" ] || error "Missing generated app. Run make build-app first."
-    require_cmd makepkg
+    require_cmd tar
 
-    local arch output_file source_root
+    local arch output_file pkgdir
     arch="$(map_arch)"
     output_file="$DIST_DIR/${PACKAGE_NAME}-${PACMAN_VERSION}-1-${arch}.pkg.tar.zst"
-    source_root="$PKG_WORK/src/app"
+    pkgdir="$PKG_WORK/pkg/$PACKAGE_NAME"
 
     rm -rf "$PKG_WORK"
-    mkdir -p "$source_root"
-    cp -a "$APP_DIR/." "$source_root/"
+    mkdir -p \
+        "$pkgdir/opt/$PACKAGE_NAME" \
+        "$pkgdir/usr/bin" \
+        "$pkgdir/usr/share/applications" \
+        "$pkgdir/usr/share/icons/hicolor/256x256/apps"
+
+    cp -a "$APP_DIR/." "$pkgdir/opt/$PACKAGE_NAME/"
+    sanitize_package_tree "$pkgdir"
 
     sed -e "s|__EXEC__|/opt/$PACKAGE_NAME/start.sh %F|g" "$DESKTOP_TEMPLATE" \
-        > "$PKG_WORK/$PACKAGE_NAME.desktop"
+        > "$pkgdir/usr/share/applications/$PACKAGE_NAME.desktop"
+    chmod 0644 "$pkgdir/usr/share/applications/$PACKAGE_NAME.desktop"
 
-    cat > "$PKG_WORK/PKGBUILD" <<EOF
-pkgname=$PACKAGE_NAME
-pkgver=$PACMAN_VERSION
-pkgrel=1
-pkgdesc='Unofficial local Linux conversion of WorkBuddy'
-arch=('$arch')
-license=('MIT')
-depends=('gtk3' 'nss' 'libxss' 'alsa-lib' 'libsecret' 'libxkbfile')
-options=('!debug' '!strip')
-source=()
-sha256sums=()
-
-package() {
-  mkdir -p "\$pkgdir/opt/$PACKAGE_NAME" "\$pkgdir/usr/bin" "\$pkgdir/usr/share/applications" "\$pkgdir/usr/share/icons/hicolor/256x256/apps"
-  cp -R --no-preserve=ownership "$source_root/." "\$pkgdir/opt/$PACKAGE_NAME/"
-  cat > "\$pkgdir/usr/bin/$PACKAGE_NAME" <<'SCRIPT'
+    cat > "$pkgdir/usr/bin/$PACKAGE_NAME" <<EOF
 #!/bin/bash
 exec /opt/$PACKAGE_NAME/start.sh "\$@"
-SCRIPT
-  chmod 0755 "\$pkgdir/usr/bin/$PACKAGE_NAME"
-  install -m 0644 "$PKG_WORK/$PACKAGE_NAME.desktop" "\$pkgdir/usr/share/applications/$PACKAGE_NAME.desktop"
-  if [ -f "$source_root/.workbuddy-linux/workbuddy.png" ]; then
-    install -m 0644 "$source_root/.workbuddy-linux/workbuddy.png" "\$pkgdir/usr/share/icons/hicolor/256x256/apps/workbuddy.png"
-  fi
-  # Set SUID bit on chrome-sandbox so Chromium can spawn child processes
-  if [ -f "\$pkgdir/opt/$PACKAGE_NAME/chrome-sandbox" ]; then
-    chmod 4755 "\$pkgdir/opt/$PACKAGE_NAME/chrome-sandbox"
-  fi
-}
+EOF
+    chmod 0755 "$pkgdir/usr/bin/$PACKAGE_NAME"
+
+    if [ -f "$APP_DIR/.workbuddy-linux/workbuddy.png" ]; then
+        cp "$APP_DIR/.workbuddy-linux/workbuddy.png" \
+            "$pkgdir/usr/share/icons/hicolor/256x256/apps/workbuddy.png"
+        chmod 0644 "$pkgdir/usr/share/icons/hicolor/256x256/apps/workbuddy.png"
+    fi
+
+    if [ -f "$pkgdir/opt/$PACKAGE_NAME/chrome-sandbox" ]; then
+        chmod 4755 "$pkgdir/opt/$PACKAGE_NAME/chrome-sandbox"
+    fi
+
+    local installed_size
+    installed_size="$(du -sk "$pkgdir" | awk '{print $1}')"
+    cat > "$pkgdir/.PKGINFO" <<EOF
+pkgname = $PACKAGE_NAME
+pkgbase = $PACKAGE_NAME
+pkgver = $PACMAN_VERSION-1
+pkgdesc = Unofficial local Linux conversion of WorkBuddy
+url = https://github.com/tencent-cloud/WorkBuddy
+builddate = $(date -u +%s)
+packager = workbuddy-linux
+size = $installed_size
+arch = $arch
+license = MIT
+depend = gtk3
+depend = nss
+depend = libxss
+depend = alsa-lib
+depend = libsecret
+depend = libxkbfile
 EOF
 
-    (
-        cd "$PKG_WORK"
-        makepkg -f --noconfirm
-    )
-
     mkdir -p "$DIST_DIR"
-    # makepkg may produce a split debug package (*-debug-*.pkg.tar.zst) in
-    # addition to the main package.  Pick only the main package to copy out.
-    local built_pkg
-    built_pkg="$(find "$PKG_WORK" -maxdepth 1 -name "${PACKAGE_NAME}-*.pkg.tar.zst" \
-        ! -name "${PACKAGE_NAME}-debug-*.pkg.tar.zst" | head -n 1)"
-    [ -n "$built_pkg" ] || error "makepkg did not produce a package in $PKG_WORK"
-    cp "$built_pkg" "$output_file"
+    rm -f "$output_file"
+    if tar --help 2>/dev/null | grep -q -- '--zstd'; then
+        tar --zstd --owner=0 --group=0 -C "$pkgdir" -cf "$output_file" .
+    else
+        require_cmd zstd
+        tar --owner=0 --group=0 -C "$pkgdir" -cf - . | zstd -T0 -19 -o "$output_file"
+    fi
+    [ -f "$output_file" ] || error "pacman package was not produced"
     info "Built package: $output_file"
 }
 

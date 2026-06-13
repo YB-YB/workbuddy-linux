@@ -39,6 +39,7 @@ main() {
         "$PKG_ROOT/usr/share/icons/hicolor/256x256/apps"
 
     cp -a "$APP_DIR/." "$PKG_ROOT/opt/$PACKAGE_NAME/"
+    sanitize_package_tree "$PKG_ROOT"
 
     # Set SUID bit on chrome-sandbox so Chromium can spawn child processes
     if [ -f "$PKG_ROOT/opt/$PACKAGE_NAME/chrome-sandbox" ]; then

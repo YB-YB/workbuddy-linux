@@ -42,6 +42,7 @@ main() {
         "$output_dir/BUILD" "$output_dir/RPMS" "$output_dir/SOURCES" "$output_dir/SPECS" "$output_dir/SRPMS"
 
     cp -a "$APP_DIR/." "$PKG_ROOT/opt/$PACKAGE_NAME/"
+    sanitize_package_tree "$PKG_ROOT"
 
     # Set SUID bit on chrome-sandbox so Chromium can spawn child processes
     if [ -f "$PKG_ROOT/opt/$PACKAGE_NAME/chrome-sandbox" ]; then

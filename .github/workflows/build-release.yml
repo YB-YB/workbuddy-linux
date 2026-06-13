@@ -87,7 +87,8 @@ jobs:
             nodejs \
             npm \
             dpkg-dev \
-            rpm
+            rpm \
+            zstd
           # Verify key tools
           node --version
           npm --version
@@ -152,6 +153,11 @@ jobs:
           bash scripts/build-rpm.sh && echo "RPM OK" || echo "RPM SKIPPED"
           echo "::endgroup::"
 
+          # Arch Linux pacman package (built directly; no makepkg needed on Ubuntu)
+          echo "::group::Building Arch pacman package"
+          bash scripts/build-pacman.sh && echo "PACMAN OK" || echo "PACMAN SKIPPED"
+          echo "::endgroup::"
+
           # Show what we got
           echo "::group::Artifacts"
           ls -lh dist/
@@ -167,6 +173,7 @@ jobs:
           path: |
             dist/*.deb
             dist/*.rpm
+            dist/*.pkg.tar.zst
             dist/*.AppImage
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
@@ -194,6 +201,7 @@ jobs:
             |---|---|---|
             | `*_amd64.deb` | Debian | Ubuntu, Debian, Linux Mint, 等 |
             | `*.x86_64.rpm` | RPM | Fedora, RHEL, openSUSE, 等 |
+            | `*.pkg.tar.zst` | Pacman | Arch Linux, Manjaro, EndeavourOS, 等 |
             | `*-x86_64.AppImage` | AppImage | 任何 Linux 发行版（便携，无需安装） |
 
             ### 使用方法
@@ -204,6 +212,9 @@ jobs:
 
             # Fedora/RHEL
             sudo rpm -ivh workbuddy-*.x86_64.rpm
+
+            # Arch Linux
+            sudo pacman -U workbuddy-*.pkg.tar.zst
 
             # AppImage（任何发行版）
             chmod +x WorkBuddy-*.AppImage
@@ -219,6 +230,7 @@ jobs:
           files: |
             dist/*.deb
             dist/*.rpm
+            dist/*.pkg.tar.zst
             dist/*.AppImage
           draft: true
           generate_release_notes: true
