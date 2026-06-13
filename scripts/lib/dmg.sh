@@ -116,3 +116,29 @@ PY
 
     echo ""
 }
+
+# Read the full version (short + build number, e.g. "5.0.3.30150715") from
+# the DMG's Info.plist. Used by CI to create a unique release tag.
+read_app_full_version() {
+    local app_bundle="$1"
+    local plist="$app_bundle/Contents/Info.plist"
+
+    if [ -f "$plist" ]; then
+        python3 - "$plist" <<'PY'
+import plistlib, sys
+
+with open(sys.argv[1], "rb") as handle:
+    data = plistlib.load(handle)
+short = data.get("CFBundleShortVersionString", "")
+build = data.get("CFBundleVersion", "")
+# If short already contains build info, use it as-is; otherwise append.
+if short and build and build not in short:
+    print(f"{short}.{build}")
+else:
+    print(short or build or "unknown")
+PY
+        return 0
+    fi
+
+    echo "unknown"
+}

@@ -1,0 +1,221 @@
+name: Build & Release from DMG
+#
+# Manual workflow that:
+#   1. Downloads the official WorkBuddy macOS DMG from a user-provided URL
+#   2. Runs the full Linux porting pipeline (extract, patch, rebuild)
+#   3. Packages into .deb, .rpm, .AppImage
+#   4. Creates a GitHub Release with version matching the DMG
+#
+# Usage:
+#   1. Go to Actions → "Build & Release from DMG" → "Run workflow"
+#   2. Paste the DMG download URL
+#   3. Wait ~15–20 minutes for the build to finish
+#   4. Review the draft release and publish it manually
+#
+# The DMG URL must be a *direct* download (no interstitial page).
+# If the official site requires authentication cookies, pass them via
+# COOKIE_HEADER or DMG_URL using signed CloudFront / S3 pre-signed URLs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dmg_url:
+        description: 'Direct download URL to the official WorkBuddy macOS x64 DMG'
+        required: true
+        type: string
+      dmg_filename:
+        description: 'DMG filename override (default: auto-detected from URL)'
+        required: false
+        type: string
+        default: ''
+
+env:
+  # Upload intermediate artifacts even on failure for debugging
+  ARTIFACT_RETENTION_DAYS: 7
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # needed to create Release + upload assets
+
+    steps:
+      # --------------------------------------------------------------
+      # 1. Checkout
+      # --------------------------------------------------------------
+      - uses: actions/checkout@v4
+
+      # --------------------------------------------------------------
+      # 2. Download DMG
+      # --------------------------------------------------------------
+      - name: Download official DMG
+        id: download
+        run: |
+          mkdir -p downloads
+
+          # Determine filename from URL or user override
+          URL="${{ inputs.dmg_url }}"
+          FILENAME="${{ inputs.dmg_filename }}"
+          if [ -z "$FILENAME" ]; then
+            FILENAME="${URL##*/}"
+            # Strip query params
+            FILENAME="${FILENAME%%\?*}"
+          fi
+          [ -n "$FILENAME" ] || FILENAME="WorkBuddy.dmg"
+
+          echo "Downloading DMG from: $URL"
+          echo "  → saving as: downloads/$FILENAME"
+
+          # Retry with backoff; the download can be slow
+          curl -fSL --retry 3 --retry-delay 10 \
+            -o "downloads/$FILENAME" \
+            "$URL"
+
+          ls -lh "downloads/$FILENAME"
+          echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
+          echo "filesize=$(stat -c%s 'downloads/$FILENAME')" >> "$GITHUB_OUTPUT"
+
+      # --------------------------------------------------------------
+      # 3. Install build deps
+      # --------------------------------------------------------------
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            p7zip-full \
+            curl \
+            nodejs \
+            npm \
+            dpkg-dev \
+            rpm
+          # Verify key tools
+          node --version
+          npm --version
+          python3 --version
+          7z --help >/dev/null 2>&1 && echo "7z OK"
+
+      # --------------------------------------------------------------
+      # 4. Build WorkBuddy for Linux
+      # --------------------------------------------------------------
+      - name: Build WorkBuddy Linux app
+        run: |
+          make build-app DMG="downloads/${{ steps.download.outputs.filename }}"
+        env:
+          # Speed up Electron download
+          ELECTRON_MIRROR: "https://github.com/electron/electron/releases/download/"
+
+      # --------------------------------------------------------------
+      # 5. Read upstream version for release tag
+      # --------------------------------------------------------------
+      - name: Read upstream version
+        id: version
+        run: |
+          BUILD_INFO="workbuddy-app/.workbuddy-linux/build-info.json"
+          if [ ! -f "$BUILD_INFO" ]; then
+            echo "ERROR: build-info.json not found"
+            exit 1
+          fi
+
+          # Extract version fields via single-line Python commands
+          python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('upstreamVersion','unknown'))" "$BUILD_INFO" > /tmp/upstream_version.txt
+          python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('fullVersion',d.get('upstreamVersion','unknown')))" "$BUILD_INFO" > /tmp/full_version.txt
+
+          UPSTREAM_VERSION="$(cat /tmp/upstream_version.txt)"
+          FULL_VERSION="$(cat /tmp/full_version.txt)"
+
+          echo "upstream_version=$UPSTREAM_VERSION" >> "$GITHUB_OUTPUT"
+          echo "full_version=$FULL_VERSION"          >> "$GITHUB_OUTPUT"
+          echo "tag=v${FULL_VERSION}"                >> "$GITHUB_OUTPUT"
+          echo "Project version: $UPSTREAM_VERSION"
+          echo "Release tag:     v$FULL_VERSION"
+
+      # --------------------------------------------------------------
+      # 6. Package all distribution formats
+      # --------------------------------------------------------------
+      - name: Package distributions
+        id: package
+        run: |
+          mkdir -p dist
+
+          # .deb (always available on Ubuntu)
+          echo "::group::Building .deb"
+          make deb
+          echo "::endgroup::"
+
+          # .AppImage (auto-downloads appimagetool; may flag FUSE warnings)
+          echo "::group::Building .AppImage"
+          make appimage
+          echo "::endgroup::"
+
+          # .rpm (best-effort; requires rpmbuild from the rpm package)
+          echo "::group::Building .rpm"
+          bash scripts/build-rpm.sh && echo "RPM OK" || echo "RPM SKIPPED"
+          echo "::endgroup::"
+
+          # Show what we got
+          echo "::group::Artifacts"
+          ls -lh dist/
+          echo "::endgroup::"
+
+      # --------------------------------------------------------------
+      # 7. Upload artifacts as build output (always, even if release fails)
+      # --------------------------------------------------------------
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WorkBuddy-${{ steps.version.outputs.upstream_version }}
+          path: dist/*
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+      # --------------------------------------------------------------
+      # 8. Create GitHub Release
+      # --------------------------------------------------------------
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: WorkBuddy v${{ steps.version.outputs.upstream_version }}
+          body: |
+            ## WorkBuddy Linux 移植版
+
+            | 元数据 | 值 |
+            |---|---|
+            | 上游版本 | `${{ steps.version.outputs.upstream_version }}` |
+            | 完整版本 | `${{ steps.version.outputs.full_version }}` |
+            | 构建日期 | $(date -u +%Y-%m-%d) |
+            | 构建环境 | GitHub Actions (${{ github.run_id }}) |
+
+            ### 安装包说明
+
+            | 文件 | 格式 | 适用发行版 |
+            |---|---|---|
+            | `*_amd64.deb` | Debian | Ubuntu, Debian, Linux Mint, 等 |
+            | `*.x86_64.rpm` | RPM | Fedora, RHEL, openSUSE, 等 |
+            | `*-x86_64.AppImage` | AppImage | 任何 Linux 发行版（便携，无需安装） |
+
+            ### 使用方法
+
+            ```bash
+            # Debian/Ubuntu
+            sudo dpkg -i workbuddy_*_amd64.deb
+
+            # Fedora/RHEL
+            sudo rpm -ivh workbuddy-*.x86_64.rpm
+
+            # AppImage（任何发行版）
+            chmod +x WorkBuddy-*.AppImage
+            ./WorkBuddy-*.AppImage
+            ```
+
+            ### 注意事项
+
+            - 本版本由 [workbuddy-linux](https://github.com/$(echo "${{ github.repository }}")) 自动构建。
+            - 这是非官方移植版，**禁止通过官方渠道反馈 Linux 相关 Bug**。
+            - 如需升级，请下载新版官方 DMG 后在本仓库重新发起工作流。
+            - 此 Release 为 **Draft** 状态，确认无误后请手动发布。
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
+          draft: true
+          generate_release_notes: true

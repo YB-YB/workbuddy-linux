@@ -29,6 +29,13 @@
   同步写入项目级 `package.json` 的 `version` 字段和 `workbuddy-app/.workbuddy-linux/version` 文件，
   并 `export PACKAGE_VERSION` 供下游打包脚本使用。所有打包脚本（deb/rpm/pacman/AppImage）的
   版本号默认从此读取，不再回退到构建时间戳。
+- **`build-info.json` 增加 `fullVersion` 字段** — 同时记录 `CFBundleVersion`（构建号），
+  如 `5.0.3.30150715`，用于 GitHub Release 的唯一 tag 标识。
+- **`.github/workflows/build-release.yml`** — 全自动构建 + 发布工作流：
+  - 手动触发，接收官方 DMG 直链作为输入
+  - 云端下载 DMG → 构建 Linux 移植版 → 打包 deb/rpm/AppImage
+  - 自动读取 DMG 版本号作为 GitHub Release 的 tag（`v5.0.3.30150715`）和标题（`WorkBuddy v5.0.3`）
+  - Release 为 Draft 状态，发布前可人工审核
 
 - **`scripts/lib/apply-linux-patches.js` Patch 7A — `ConnectorMcpProxy.maybeInjectNodeRuntime`**
   给 `prepareNodeRuntimeEnv()` 加 5s `Promise.race` 兜底。`BinaryManager.doInitialize()`

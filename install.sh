@@ -277,13 +277,15 @@ EOF
 
 write_build_metadata() {
     local version="$1"
-    local app_bundle="$2"
+    local full_version="$2"
+    local app_bundle="$3"
     mkdir -p "$INSTALL_DIR/.workbuddy-linux"
     cat > "$INSTALL_DIR/.workbuddy-linux/build-info.json" <<EOF
 {
   "appId": "$APP_ID",
   "displayName": "$APP_DISPLAY_NAME",
   "upstreamVersion": "$version",
+  "fullVersion": "$full_version",
   "electronVersion": "$ELECTRON_VERSION",
   "generatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -320,13 +322,15 @@ main() {
     app_bundle="$(resolve_app_bundle "$input_path")"
     ELECTRON_VERSION="$(detect_electron_version "$app_bundle")"
     upstream_version="$(read_app_version "$app_bundle")"
+    local full_version
+    full_version="$(read_app_full_version "$app_bundle")"
 
     info "Using app bundle: $app_bundle"
     info "Using Electron: $ELECTRON_VERSION"
-    info "Upstream version: $upstream_version"
+    info "Upstream version: $upstream_version (full: $full_version)"
 
     # Export for downstream packaging scripts
-    export PACKAGE_VERSION="${upstream_version:-$(date -u +%Y.%m.%d.%H%M%S)}"
+    export PACKAGE_VERSION="${full_version:-${upstream_version:-$(date -u +%Y.%m.%d.%H%M%S)}}"
 
     prepare_install_dir
     download_electron_runtime
@@ -357,7 +361,7 @@ main() {
     write_launcher
     write_desktop_entry
     write_package_version "$upstream_version"
-    write_build_metadata "$upstream_version" "$app_bundle"
+    write_build_metadata "$upstream_version" "$full_version" "$app_bundle"
 
     info "Build complete: $INSTALL_DIR"
     info "Run: $INSTALL_DIR/start.sh"
