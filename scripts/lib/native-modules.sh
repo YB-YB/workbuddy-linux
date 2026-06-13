@@ -18,6 +18,70 @@ native_module_report() {
         | grep -v '__pycache__' | sort || true
 }
 
+write_native_cleanup_report() {
+    local app_dir="$1"
+    local install_dir report_dir report_path docs_darwin_dir docs_dylib_count sandbox_foreign_count foreign_binary_count
+
+    install_dir="$(cd "$app_dir/../.." && pwd)"
+    report_dir="$install_dir/.workbuddy-linux"
+    report_path="$report_dir/native-cleanup-report.json"
+    mkdir -p "$report_dir"
+
+    docs_darwin_dir="$app_dir/node_modules/@tencent/docs-engine/lib/darwin-arm64"
+    docs_dylib_count="$(find "$app_dir/node_modules/@tencent/docs-engine" -name "*.dylib" -type f 2>/dev/null | wc -l | tr -d ' ')"
+    sandbox_foreign_count="0"
+    foreign_binary_count="0"
+
+    if command -v file >/dev/null 2>&1; then
+        while IFS= read -r native_file; do
+            local description
+            description="$(file "$native_file" 2>/dev/null || true)"
+            case "$description" in
+                *Mach-O*|*"PE32"*|*"PE32+"*|*"MS Windows"*)
+                    ((foreign_binary_count++)) || true
+                    case "$native_file" in
+                        */cli/vendor/sandbox/*) ((sandbox_foreign_count++)) || true ;;
+                    esac
+                    ;;
+            esac
+        done < <(find "$app_dir" \( -name "*.node" -o -name "*.dylib" -o -name "*.so" -o -name "*.dll" -o -name "*.exe" \) -type f 2>/dev/null | sort || true)
+
+        while IFS= read -r native_file; do
+            [ -x "$native_file" ] || continue
+            local description
+            description="$(file "$native_file" 2>/dev/null || true)"
+            case "$description" in
+                *Mach-O*|*"PE32"*|*"PE32+"*|*"MS Windows"*)
+                    ((foreign_binary_count++)) || true
+                    case "$native_file" in
+                        */cli/vendor/sandbox/*) ((sandbox_foreign_count++)) || true ;;
+                    esac
+                    ;;
+            esac
+        done < <(find "$app_dir/cli/vendor" -type f 2>/dev/null | sort || true)
+    fi
+
+    cat > "$report_path" <<EOF
+{
+  "docsEngineDarwinArm64Removed": $([ ! -d "$docs_darwin_dir" ] && echo true || echo false),
+  "docsEngineDylibCount": $docs_dylib_count,
+  "sandboxForeignBinaryCount": $sandbox_foreign_count,
+  "foreignBinaryCount": $foreign_binary_count,
+  "chromiumSandboxPolicy": "enabled-by-default",
+  "tencentSandboxPolicy": "linux-unavailable-cleaned-and-degraded"
+}
+EOF
+    info "Native cleanup report written: $report_path"
+}
+
+lydell_node_pty_linux_package() {
+    case "$ARCH" in
+        x86_64) echo "@lydell/node-pty-linux-x64" ;;
+        aarch64) echo "@lydell/node-pty-linux-arm64" ;;
+        *) return 1 ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 # Phase 1: Delete ALL non-Linux platform binaries and packages
 # ---------------------------------------------------------------------------
@@ -127,7 +191,7 @@ purge_remaining_foreign_binaries() {
                 ((removed++)) || true
                 ;;
         esac
-    done < <(find "$app_dir" \( -name "*.node" -o -name "*.dylib" -o -name "*.so" -o -name "*.dll" \) -type f 2>/dev/null | sort || true)
+    done < <(find "$app_dir" \( -name "*.node" -o -name "*.dylib" -o -name "*.so" -o -name "*.dll" -o -name "*.exe" \) -type f 2>/dev/null | sort || true)
 
     # Also check executables without extensions
     while IFS= read -r native_file; do
@@ -301,11 +365,8 @@ install_lydell_node_pty_linux() {
     version="$(node -e 'const p=require(process.argv[1]); process.stdout.write(String(p.version || ""));' "$lydell_pkg")"
     [ -n "$version" ] || return 0
 
-    case "$ARCH" in
-        x86_64) linux_pkg_name="@lydell/node-pty-linux-x64" ;;
-        aarch64) linux_pkg_name="@lydell/node-pty-linux-arm64" ;;
-        *) warn "  No @lydell/node-pty Linux platform package for $ARCH"; return 0 ;;
-    esac
+    linux_pkg_name="$(lydell_node_pty_linux_package 2>/dev/null || true)"
+    [ -n "$linux_pkg_name" ] || { warn "  No @lydell/node-pty Linux platform package for $ARCH"; return 0; }
 
     build_dir="$WORK_DIR/lydell-pty-$(basename "$target_dir")"
     rm -rf "$build_dir"
@@ -402,42 +463,42 @@ install_linux_platform_packages() {
         install_lydell_node_pty_linux "$app_dir/cli"
     fi
 
-    # Ensure @lydell/node-pty-linux-x64 is also in the top-level node_modules
+    # Ensure the Linux @lydell/node-pty platform package is also in the top-level node_modules
     # even if @lydell/node-pty main package lives inside app.asar (packed).
     # The sidecar process requires it from within the asar, and the patch
     # script registers it as an unpacked entry during repack.
-    local linux_pkg="$app_dir/node_modules/@lydell/node-pty-linux-x64"
+    local pkg_name
+    pkg_name="$(lydell_node_pty_linux_package 2>/dev/null || true)"
+    if [ -z "$pkg_name" ]; then
+        warn "  No @lydell/node-pty top-level Linux package for $ARCH"
+        install_cli_ripgrep_linux "$app_dir"
+        return 0
+    fi
+
+    local linux_pkg="$app_dir/node_modules/$pkg_name"
     if [ ! -d "$linux_pkg" ]; then
         # Try to copy from cli/node_modules if available
-        local cli_pkg="$app_dir/cli/node_modules/@lydell/node-pty-linux-x64"
+        local cli_pkg="$app_dir/cli/node_modules/$pkg_name"
         if [ -d "$cli_pkg" ]; then
             mkdir -p "$(dirname "$linux_pkg")"
             cp -a "$cli_pkg" "$linux_pkg"
-            info "  Copied @lydell/node-pty-linux-x64 from cli/ to top-level node_modules"
+            info "  Copied $pkg_name from cli/ to top-level node_modules"
         else
             # Install fresh from npm
             local version="1.2.0-beta.12"
-            local pkg_name
-            case "$ARCH" in
-                x86_64) pkg_name="@lydell/node-pty-linux-x64" ;;
-                aarch64) pkg_name="@lydell/node-pty-linux-arm64" ;;
-                *) pkg_name="" ;;
-            esac
-            if [ -n "$pkg_name" ]; then
-                local build_dir="$WORK_DIR/lydell-pty-toplevel"
-                rm -rf "$build_dir"
-                mkdir -p "$build_dir"
-                (
-                    cd "$build_dir"
-                    npm init -y >/dev/null 2>&1
-                    npm install "$pkg_name@$version" --no-audit --no-fund 2>&1
-                ) || true
-                local src_path="$build_dir/node_modules/$pkg_name"
-                if [ -d "$src_path" ]; then
-                    mkdir -p "$(dirname "$linux_pkg")"
-                    cp -a "$src_path" "$linux_pkg"
-                    info "  Installed $pkg_name@$version to top-level node_modules"
-                fi
+            local build_dir="$WORK_DIR/lydell-pty-toplevel"
+            rm -rf "$build_dir"
+            mkdir -p "$build_dir"
+            (
+                cd "$build_dir"
+                npm init -y >/dev/null 2>&1
+                npm install "$pkg_name@$version" --no-audit --no-fund 2>&1
+            ) || true
+            local src_path="$build_dir/node_modules/$pkg_name"
+            if [ -d "$src_path" ]; then
+                mkdir -p "$(dirname "$linux_pkg")"
+                cp -a "$src_path" "$linux_pkg"
+                info "  Installed $pkg_name@$version to top-level node_modules"
             fi
         fi
     fi
@@ -475,6 +536,8 @@ rebuild_native_modules() {
 
     # Phase 3: Rebuild native modules from npm source
     rebuild_critical_modules "$app_dir"
+    purge_all_non_linux_artifacts "$app_dir"
+    purge_remaining_foreign_binaries "$app_dir"
     info ""
 
     # Phase 4: Install Linux platform packages
@@ -484,6 +547,7 @@ rebuild_native_modules() {
     # Final verification
     info "Native modules AFTER rebuild:"
     native_module_report "$app_dir" >&2
+    write_native_cleanup_report "$app_dir"
 
     info ""
     info "Native module rebuild complete."

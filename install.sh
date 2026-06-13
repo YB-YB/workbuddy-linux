@@ -31,6 +31,9 @@ Environment:
   WORKBUDDY_INSTALL_DIR     Output app directory (default: ./workbuddy-app)
   ELECTRON_MIRROR           Optional Electron runtime mirror
   ELECTRON_HEADERS_URL      Electron headers dist URL for native rebuilds
+  WORKBUDDY_DISABLE_SANDBOX Set to 1 to append --no-sandbox flags explicitly
+  WORKBUDDY_LOCAL_MODE      Set to 1 to start the local CLI Web UI instead of Desktop
+  WORKBUDDY_LOCAL_PORT      Local CLI Web UI port (default: 7890)
 HELP
 }
 
@@ -191,16 +194,52 @@ APP_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 export CHROME_DESKTOP="${APP_ID}.desktop"
 export ELECTRON_FORCE_IS_PACKAGED=1
 
-exec "\$APP_DIR/electron" \\
-  --no-sandbox \\
-  --disable-dev-shm-usage \\
-  --disable-gpu-sandbox \\
-  --in-process-gpu \\
-  --ozone-platform-hint=auto \\
-  --enable-wayland-ime \\
-  "\$@"
+# [wb-linux] Force Electron to use ayatana-appindicator (StatusNotifierItem)
+# instead of its default GtkStatusIcon (X11 XEmbed). Wayland sessions and
+# modern panels (waybar / quickshell DMS / KDE Plasma 6) only implement the
+# SNI protocol; without "Unity" in XDG_CURRENT_DESKTOP, Electron registers
+# the tray on a path no host listens to and the icon disappears completely.
+# We only inject "Unity:" when it is not already present so users on Unity /
+# GNOME with extensions / KDE keep their original desktop name intact.
+if [ -z "\${XDG_CURRENT_DESKTOP:-}" ] || [[ ":\${XDG_CURRENT_DESKTOP:-}:" != *":Unity:"* ]]; then
+  export XDG_CURRENT_DESKTOP="Unity:\${XDG_CURRENT_DESKTOP:-}"
+fi
+
+# [wb-linux] codebuddy CLI inside app.asar.unpacked waits up to 30s per
+# stdio MCP server during settle; with N connectors enabled this stacks up
+# and blocks the first LLM call for minutes if any one of them is slow to
+# respond. 3s is enough for healthy local servers; the upstream
+# Promise.race fallback still proceeds with whichever servers did connect.
+export MCP_TIMEOUT="\${MCP_TIMEOUT:-3000}"
+export MCP_TOOL_TIMEOUT="\${MCP_TOOL_TIMEOUT:-30000}"
+
+ARGS=(
+  --disable-dev-shm-usage
+  --in-process-gpu
+  --ozone-platform-hint=auto
+  --enable-wayland-ime
+)
+
+if [ "\${WORKBUDDY_DISABLE_SANDBOX:-0}" = "1" ]; then
+  ARGS+=(--no-sandbox --disable-gpu-sandbox)
+fi
+
+if [ "\${WORKBUDDY_LOCAL_MODE:-0}" = "1" ]; then
+  exec "\$APP_DIR/resources/app.asar.unpacked/cli/bin/codebuddy" --serve --host 127.0.0.1 --port "\${WORKBUDDY_LOCAL_PORT:-7890}" --open
+fi
+
+exec "\$APP_DIR/electron" "\${ARGS[@]}" "\$@"
 EOF
     chmod +x "$INSTALL_DIR/start.sh"
+
+    cat > "$INSTALL_DIR/start-local.sh" <<EOF
+#!/bin/bash
+set -euo pipefail
+
+APP_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+exec "\$APP_DIR/resources/app.asar.unpacked/cli/bin/codebuddy" --serve --host 127.0.0.1 --port "\${WORKBUDDY_LOCAL_PORT:-7890}" --open
+EOF
+    chmod +x "$INSTALL_DIR/start-local.sh"
 }
 
 write_desktop_entry() {
@@ -222,12 +261,23 @@ StartupNotify=true
 StartupWMClass=WorkBuddy
 MimeType=x-scheme-handler/workbuddy;
 EOF
+
+    cat > "$INSTALL_DIR/.workbuddy-linux/$APP_ID-local.desktop" <<EOF
+[Desktop Entry]
+Name=$APP_DISPLAY_NAME Local
+Comment=Run WorkBuddy local CLI Web UI on Linux
+Exec=$INSTALL_DIR/start-local.sh
+Icon=$icon_value
+Type=Application
+Categories=Development;IDE;
+StartupNotify=true
+StartupWMClass=WorkBuddy
+EOF
 }
 
 write_build_metadata() {
-    local app_bundle="$1"
-    local version
-    version="$(read_app_version "$app_bundle")"
+    local version="$1"
+    local app_bundle="$2"
     mkdir -p "$INSTALL_DIR/.workbuddy-linux"
     cat > "$INSTALL_DIR/.workbuddy-linux/build-info.json" <<EOF
 {
@@ -240,17 +290,43 @@ write_build_metadata() {
 EOF
 }
 
+# Patch the project-level package.json so its version field reflects the
+# upstream DMG version (e.g. "5.0.3"). This keeps the repo's metadata in
+# sync with whatever DMG the user built from. Also writes a .version file
+# inside the app dir so packaging scripts can consume it without parsing
+# package.json.
+write_package_version() {
+    local version="$1"
+    local pkg_json="$SCRIPT_DIR/package.json"
+    local app_version_file="$INSTALL_DIR/.workbuddy-linux/version"
+    if [ -f "$pkg_json" ]; then
+        node -e "
+            var p = require('${pkg_json}');
+            p.version = '${version}';
+            require('fs').writeFileSync('${pkg_json}', JSON.stringify(p, null, 2) + '\n');
+        " 2>/dev/null && \
+            info "Updated package.json version to $version" || \
+            warn "Failed to update package.json version to $version"
+    fi
+    echo -n "$version" > "$app_version_file"
+}
+
 main() {
     parse_args "$@"
     check_deps
 
-    local input_path app_bundle
+    local input_path app_bundle upstream_version
     input_path="$(resolve_input_path "$PROVIDED_INPUT")"
     app_bundle="$(resolve_app_bundle "$input_path")"
     ELECTRON_VERSION="$(detect_electron_version "$app_bundle")"
+    upstream_version="$(read_app_version "$app_bundle")"
 
     info "Using app bundle: $app_bundle"
     info "Using Electron: $ELECTRON_VERSION"
+    info "Upstream version: $upstream_version"
+
+    # Export for downstream packaging scripts
+    export PACKAGE_VERSION="${upstream_version:-$(date -u +%Y.%m.%d.%H%M%S)}"
 
     prepare_install_dir
     download_electron_runtime
@@ -258,6 +334,9 @@ main() {
 
     # Rebuild native modules in app.asar.unpacked (where the .node files live)
     local native_dir="$INSTALL_DIR/resources/app.asar.unpacked"
+    local lydell_platform_package
+    lydell_platform_package="$(lydell_node_pty_linux_package 2>/dev/null || true)"
+
     if [ -d "$native_dir/node_modules" ]; then
         rebuild_native_modules "$native_dir"
     elif [ -d "$INSTALL_DIR/resources/app/node_modules" ]; then
@@ -266,12 +345,19 @@ main() {
 
     # Apply Linux-specific runtime patches inside app.asar so the main
     # window actually opens and the tray right-click menu is populated.
-    apply_linux_runtime_patches "$INSTALL_DIR"
+    # Directory-mode payloads are preserved for older experiments; they do
+    # not have an app.asar to repack, so the asar-only patcher is skipped.
+    if [ -f "$INSTALL_DIR/resources/app.asar" ]; then
+        apply_linux_runtime_patches "$INSTALL_DIR" "$lydell_platform_package"
+    else
+        warn "Skipping app.asar Linux runtime patches for directory-mode payload"
+    fi
 
     write_icon "$app_bundle"
     write_launcher
     write_desktop_entry
-    write_build_metadata "$app_bundle"
+    write_package_version "$upstream_version"
+    write_build_metadata "$upstream_version" "$app_bundle"
 
     info "Build complete: $INSTALL_DIR"
     info "Run: $INSTALL_DIR/start.sh"

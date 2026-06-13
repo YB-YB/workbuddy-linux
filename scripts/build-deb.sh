@@ -10,7 +10,7 @@ APP_DIR="${APP_DIR:-$REPO_DIR/workbuddy-app}"
 DIST_DIR="${DIST_DIR:-$REPO_DIR/dist}"
 PKG_ROOT="${PKG_ROOT:-$DIST_DIR/deb-root}"
 PACKAGE_NAME="${PACKAGE_NAME:-workbuddy}"
-PACKAGE_VERSION="${PACKAGE_VERSION:-$(date -u +%Y.%m.%d.%H%M%S)}"
+PACKAGE_VERSION="${PACKAGE_VERSION:-$(resolve_package_version)}"
 DESKTOP_TEMPLATE="$REPO_DIR/packaging/linux/workbuddy.desktop"
 CONTROL_TEMPLATE="$REPO_DIR/packaging/linux/control"
 

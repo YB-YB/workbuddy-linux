@@ -42,3 +42,19 @@ Please install the official 7zip package (version >= 21) instead:
     fi
     error "Missing 7z/7zz. Install 7zip."
 }
+
+# Read the upstream version from a built workbuddy-app's build-info.json.
+# If PACKAGE_VERSION is already set, return it. Otherwise try to parse
+# build-info.json; fall back to a UTC date string.
+resolve_package_version() {
+    local app_dir="${APP_DIR:-$REPO_DIR/workbuddy-app}"
+    local build_info="$app_dir/.workbuddy-linux/build-info.json"
+    if [ -z "${PACKAGE_VERSION:-}" ] && [ -f "$build_info" ]; then
+        PACKAGE_VERSION="$(python3 -c "
+import json, sys
+with open('$build_info') as f:
+    print(json.load(f).get('upstreamVersion', ''))
+" 2>/dev/null)" || true
+    fi
+    echo "${PACKAGE_VERSION:-$(date -u +%Y.%m.%d.%H%M%S)}"
+}

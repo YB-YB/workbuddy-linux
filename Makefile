@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help deps build-app run-app deb rpm pacman package install clean check
+.PHONY: help deps build-app run-app deb rpm pacman appimage package install check clean
 
 help:
 	@echo "Targets:"
@@ -11,7 +11,8 @@ help:
 	@echo "  make deb"
 	@echo "  make rpm"
 	@echo "  make pacman"
-	@echo "  make package"
+	@echo "  make appimage"
+	@echo "  make package               # auto-detect: deb / rpm / pacman / appimage"
 	@echo "  make install"
 	@echo "  make check"
 	@echo "  make clean"
@@ -34,6 +35,9 @@ rpm:
 pacman:
 	bash scripts/build-pacman.sh
 
+appimage:
+	bash scripts/build-appimage.sh
+
 package:
 	bash scripts/package.sh
 
@@ -42,8 +46,11 @@ install:
 
 check:
 	bash -n install.sh scripts/*.sh scripts/lib/*.sh
+	node --check scripts/lib/apply-linux-patches.js
+	bash scripts/check-portability.sh
 
 clean:
 	rm -rf workbuddy-app workbuddy-app-next dist dist-next
 	rm -rf .asar-tool .asar-extract .test-repack.asar .test-repack.asar.unpacked
 	rm -f .tmp-asar-tool.js .tmp-asar-repack.js
+	rm -rf dist/AppDir

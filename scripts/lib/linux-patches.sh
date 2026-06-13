@@ -36,11 +36,13 @@ LINUX_PATCHES_SHIM_MARKER="__WB_LINUX_PATCHES_V5__"
 apply_linux_runtime_patches() {
     local app_dir="$1"
     local asar_path="$app_dir/resources/app.asar"
+    local lydell_platform_package="${2:-}"
 
     [ -f "$asar_path" ] || {
-        warn "Linux patches: app.asar not found at $asar_path"
-        return 0
+        error "Linux patches: app.asar not found at $asar_path"
     }
+
+    [ -n "$lydell_platform_package" ] || error "Linux patches: missing @lydell/node-pty Linux platform package name"
 
     info "=== Applying Linux runtime patches to app.asar ==="
 
@@ -56,8 +58,7 @@ apply_linux_runtime_patches() {
             npm init -y >/dev/null 2>&1
             npm install @electron/asar --no-audit --no-fund --silent 2>&1
         ) || {
-            warn "  Failed to install @electron/asar; skipping Linux patches"
-            return 0
+            error "Failed to install @electron/asar; cannot safely build an unpatched Linux app"
         }
     fi
 
@@ -65,9 +66,9 @@ apply_linux_runtime_patches() {
         node "$SCRIPT_DIR/scripts/lib/apply-linux-patches.js" \
              "$asar_path" \
              "$LINUX_PATCHES_SHIM_MARKER" \
+             "$lydell_platform_package" \
         || {
-        warn "  Failed to apply Linux patches; leaving app.asar untouched"
-        return 0
+        error "Failed to apply Linux patches; refusing to produce an unpatched Linux app"
     }
     info "  Linux runtime patches applied successfully"
 }

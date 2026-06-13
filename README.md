@@ -76,11 +76,21 @@ make run-app
 
 ### 打包并安装
 
-自动生成适配当前发行版的安装包，并完成本地安装：
+自动生成适配当前发行版的安装包（`.deb`、`.rpm`、`.pkg.tar.zst`）或便携 AppImage，并完成本地安装：
 
 ```bash
 make package
 make install
+```
+
+也可以指定格式：
+```bash
+make deb          # Debian/Ubuntu (.deb)
+make rpm          # Fedora/RHEL (.rpm)
+make pacman       # Arch Linux (.pkg.tar.zst)
+make appimage     # 便携 AppImage（自动下载 appimagetool）
+# 或通过环境变量指定：
+PACKAGE_FORMAT=appimage make package
 ```
 
 ## 实现原理
@@ -115,10 +125,19 @@ WorkBuddy 基于 VS Code/Electron 开发，其 macOS 应用的 `app.asar` 文件
 3. **托盘图标显示为感叹号**：上游把图片 resize 成内存 NativeImage 传给 Tray，AppIndicator 无法正确渲染。**修复方式**：Linux 下直接用磁盘上的 `.workbuddy-linux/workbuddy.png` 路径构造 Tray。
 4. **Sidecar 子进程 spawn 失败（E2BIG）**：`buildCliEnv()` 显式把 260KB 字符串塞进 spawn 的 env 对象。**修复方式**：Monkey-patch `child_process.spawn/spawnSync`，超过 100KB 的 env 条目自动 spill 到临时文件，子进程启动时从文件读回并通过 Proxy 恢复。
 5. **`@lydell/node-pty-linux-x64` 找不到**：原 macOS asar 里只有 darwin 平台包。**修复方式**：repack 时将 Linux 平台包注入 asar 并标记为 unpacked。
+6. **首条聊天 / 连接器永远 connecting（5.0.3+wb3）**：上游 `BinaryManager.doInitialize()` 在 Linux 偶发永远 pending、`child_process.exec()` 自带 `timeout` 选项对 hang 在 syscall 里的子进程不生效（已实测 `which 'tcb'` 80s+ 不返回），同时 `userPromptComposer / runtimeConfigResolver` 在首次启动时也会卡在远端 RPC 上。任一环节卡住都会让 stdio MCP server 启动等到上游 122s connect timeout、或让首条聊天消息无限等待。**修复方式**：在 `apply-linux-patches.js` 的 Patch 7A-7F 给 `prepareNodeRuntimeEnv` / `composePromptForBackend` / `resolveRuntimeConfig` / `runPreCliAuth` / `isCliInstalled` 等关键 await 点统一加 `Promise.race` 兜底（5s/6s/30s 不等），超时回退到继承 PATH、原始 prompt、fallback config 或跳过 preAuth，**不阻塞 UI 线程**。所有 race 都标 `markOptional`，单个 anchor 失配不影响其它 patch。
+7. **Wayland / 现代面板下托盘图标完全不显示（5.0.3+wb3）**：Electron 默认仍走 GtkStatusIcon (X11 XEmbed)，但 Wayland session 与 waybar、quickshell DMS、KDE Plasma 6 等只实现 StatusNotifierItem (KDE SNI)，XEmbed 完全失效，应用日志虽然写 `trayActive=true, hasIcon=true`，但实际没在 SNI 上注册。**修复方式**：`install.sh` 生成的 `start.sh` 模板里把 `Unity` 注入到 `XDG_CURRENT_DESKTOP`（如 `Unity:XFCE`），让 Electron 走 `ayatana-appindicator` (SNI) 路径；保留原桌面名以兼容其它依赖该变量的程序。
+8. **多 connector 启用时首条 LLM 调用阻塞分钟级（5.0.3+wb3）**：上游 codebuddy CLI 的 stdio MCP settle 默认 30s/server 串行等待。**修复方式**：`start.sh` 默认 `MCP_TIMEOUT=3000`，配合 codebuddy.js 内部的 `cliMcpSettleTimeoutInteractive` patch；健康服务正常使用，慢服务跳过。
 
 ## 版本适配说明
 
-当前补丁基于官方 WorkBuddy **4.22.10**（构建号 `27634624-ec5e02bd`）验证通过。更高版本的 DMG 可能因为上游代码结构变化导致补丁无法正确应用。如遇到构建失败或运行异常，请在本仓库提 Issue 并附上所使用的 DMG 版本号。
+当前补丁基于官方 WorkBuddy **4.22.10**（构建号 `27634624-ec5e02bd`）和 **5.0.3**（构建号 `30150715-f5a1d06d`）开展适配。5.x 使用 Electron 37.10.3，仍采用 `app.asar` + `app.asar.unpacked` 载荷结构。更高版本的 DMG 可能因为上游代码结构变化导致补丁无法正确应用；构建脚本会在必需补丁未命中时中止，并在成功时生成 `.workbuddy-linux/patch-report.json` 记录补丁命中结果。如遇到构建失败或运行异常，请在本仓库提 Issue 并附上所使用的 DMG 版本号。
+
+Linux 启动脚本默认启用 Chromium sandbox。只有在明确理解安全风险并需要临时排障时，才使用下面的方式降级启动：
+
+```bash
+WORKBUDDY_DISABLE_SANDBOX=1 workbuddy --verbose
+```
 
 ## 常用自定义配置
 
@@ -238,11 +257,22 @@ make run-app
 
 ### Package & Install
 
-Generate a distribution-compatible package and install it locally:
+Generate a distribution-compatible package (`.deb`, `.rpm`, `.pkg.tar.zst`) or a portable
+AppImage, then install it locally:
 
 ```bash
 make package
 make install
+```
+
+You can also build a specific format:
+```bash
+make deb          # Debian/Ubuntu (.deb)
+make rpm          # Fedora/RHEL (.rpm)
+make pacman       # Arch Linux (.pkg.tar.zst)
+make appimage     # portable AppImage (auto-downloads appimagetool)
+# or via environment variable:
+PACKAGE_FORMAT=appimage make package
 ```
 
 ## How It Works
@@ -277,6 +307,9 @@ The following issues have been resolved via Linux runtime patches (`scripts/lib/
 3. **Tray icon shows as exclamation mark**: Upstream passes a resized in-memory NativeImage to Tray, which AppIndicator cannot render. **Fix**: On Linux, construct the Tray from the on-disk `.workbuddy-linux/workbuddy.png` path.
 4. **Sidecar subprocess spawn fails (E2BIG)**: `buildCliEnv()` explicitly puts the 260KB string into the spawn env object. **Fix**: Monkey-patch `child_process.spawn/spawnSync` to spill env entries >100KB to temp files; child processes restore the value from file on startup.
 5. **`@lydell/node-pty-linux-x64` not found**: The original macOS asar only contains darwin platform packages. **Fix**: Inject the Linux platform package into the asar during repack and mark it as unpacked.
+6. **First chat / connectors stuck "connecting" forever (5.0.3+wb3)**: Upstream's `BinaryManager.doInitialize()` occasionally stays pending forever on Linux; `child_process.exec()`'s `timeout` option does not always fire for children stuck in syscalls (we measured `which 'tcb'` not returning for 80s+); and `userPromptComposer / runtimeConfigResolver` block on remote RPCs that haven't booted yet on first launch. Any one of those wedges the stdio MCP startup until the upstream 122s connect timeout, or hangs the very first chat message indefinitely. **Fix**: Patches 7A-7F in `apply-linux-patches.js` wrap `prepareNodeRuntimeEnv` / `composePromptForBackend` / `resolveRuntimeConfig` / `runPreCliAuth` / `isCliInstalled` with `Promise.race` fallbacks (5s / 6s / 30s depending on the path). On timeout we fall back to inherited PATH, the raw prompt, the fallback config, or skip preAuth — **the UI thread is never blocked**. Each race is `markOptional`, so a single anchor mismatch on a future upstream release won't take the rest of the patches down with it.
+7. **Tray icon completely missing on Wayland / modern panels (5.0.3+wb3)**: Electron defaults to `GtkStatusIcon` (X11 XEmbed), but Wayland sessions and panels like waybar, quickshell DMS, and KDE Plasma 6 only implement `StatusNotifierItem` (KDE SNI). XEmbed is a no-op there, so the app log says `trayActive=true, hasIcon=true` while the icon never registers on the bus and never shows up in the panel. **Fix**: `install.sh` writes a `start.sh` that prepends `Unity:` to `XDG_CURRENT_DESKTOP` (e.g. `Unity:XFCE`), which switches Electron to `ayatana-appindicator` (SNI). The original desktop name is preserved in the colon-separated list so other XDG-aware programs keep working.
+8. **First LLM call blocks for minutes when multiple connectors are enabled (5.0.3+wb3)**: Upstream codebuddy CLI's stdio MCP settle waits up to 30s per server serially. **Fix**: `start.sh` exports `MCP_TIMEOUT=3000` by default, paired with the `cliMcpSettleTimeoutInteractive` patch in `cli/dist/codebuddy.js`. Healthy servers respond in <1s, slow ones get skipped via the upstream `Promise.race`.
 
 ## Version Compatibility
 

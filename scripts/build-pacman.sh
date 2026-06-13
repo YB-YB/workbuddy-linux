@@ -10,7 +10,7 @@ APP_DIR="${APP_DIR:-$REPO_DIR/workbuddy-app}"
 DIST_DIR="${DIST_DIR:-$REPO_DIR/dist}"
 PKG_WORK="${PKG_WORK:-$DIST_DIR/pacman-work}"
 PACKAGE_NAME="${PACKAGE_NAME:-workbuddy}"
-PACKAGE_VERSION="${PACKAGE_VERSION:-$(date -u +%Y.%m.%d.%H%M%S)}"
+PACKAGE_VERSION="${PACKAGE_VERSION:-$(resolve_package_version)}"
 PACMAN_VERSION="${PACKAGE_VERSION//+/_}"
 PACMAN_VERSION="${PACMAN_VERSION//-/_}"
 DESKTOP_TEMPLATE="$REPO_DIR/packaging/linux/workbuddy.desktop"
@@ -47,12 +47,13 @@ pkgdesc='Unofficial local Linux conversion of WorkBuddy'
 arch=('$arch')
 license=('MIT')
 depends=('gtk3' 'nss' 'libxss' 'alsa-lib' 'libsecret' 'libxkbfile')
+options=('!debug' '!strip')
 source=()
 sha256sums=()
 
 package() {
   mkdir -p "\$pkgdir/opt/$PACKAGE_NAME" "\$pkgdir/usr/bin" "\$pkgdir/usr/share/applications" "\$pkgdir/usr/share/icons/hicolor/256x256/apps"
-  cp -a "$source_root/." "\$pkgdir/opt/$PACKAGE_NAME/"
+  cp -R --no-preserve=ownership "$source_root/." "\$pkgdir/opt/$PACKAGE_NAME/"
   cat > "\$pkgdir/usr/bin/$PACKAGE_NAME" <<'SCRIPT'
 #!/bin/bash
 exec /opt/$PACKAGE_NAME/start.sh "\$@"

@@ -42,13 +42,43 @@ const path = require('path');
 const os = require('os');
 const asar = require('@electron/asar');
 
-const [, , asarPath, marker] = process.argv;
-if (!asarPath || !marker) {
-    console.error('Usage: apply-linux-patches.js <app.asar> <marker>');
+const [, , asarPath, marker, lydellPlatformPackage] = process.argv;
+if (!asarPath || !marker || !lydellPlatformPackage) {
+    console.error('Usage: apply-linux-patches.js <path/to/app.asar> <marker> <@lydell/node-pty-linux-arch>');
+    process.exit(2);
+}
+
+if (!/^@lydell\/node-pty-linux-(x64|arm64)$/.test(lydellPlatformPackage)) {
+    console.error('[apply-linux-patches] ERROR: unsupported @lydell platform package: ' + lydellPlatformPackage);
     process.exit(2);
 }
 
 function log(msg) { console.log('  [apply-linux-patches] ' + msg); }
+
+const patchReport = {
+    marker,
+    lydellPlatformPackage,
+    required: {},
+    optional: {},
+};
+
+function markRequired(name, ok) {
+    patchReport.required[name] = Boolean(ok);
+}
+
+function markOptional(name, ok) {
+    patchReport.optional[name] = Boolean(ok);
+}
+
+function assertRequiredPatches() {
+    const failed = Object.entries(patchReport.required)
+        .filter(([, ok]) => !ok)
+        .map(([name]) => name);
+    if (failed.length > 0) {
+        console.error('[apply-linux-patches] ERROR: required patches failed: ' + failed.join(', '));
+        process.exit(7);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 1. Extract the asar into a temp dir. We pull file contents straight from
@@ -377,7 +407,7 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray)
         var result = origRequire.apply(this, arguments);
         var modName = arguments[0];
         if (!ptyPatched && typeof modName === "string" &&
-            (modName === "@lydell/node-pty" || modName === "@lydell/node-pty-linux-x64" || modName === "node-pty") &&
+            (modName === "@lydell/node-pty" || modName === "${lydellPlatformPackage}" || modName === "node-pty") &&
             result && typeof result.spawn === "function" && !result.spawn.__wbPtyWrapped) {
           ptyPatched = true;
           var origSpawn = result.spawn;
@@ -417,9 +447,13 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray)
 
 if (source.includes(marker)) {
     log('marker already present in main/index.js; skipping source patch');
+    markRequired('mainEnvShim', true);
+    markRequired('trayContextMenu', true);
+    markRequired('trayIconPath', true);
 } else {
     const shim = SHIM_BODY;
     source = shim + source;
+    markRequired('mainEnvShim', true);
 
     const trayMarker = 'this.tray = new electron.Tray(trayIcon);';
     const trayIdx = source.indexOf(trayMarker);
@@ -440,6 +474,7 @@ if (source.includes(marker)) {
         '\t\t\t\ttry { this.tray.setContextMenu(contextMenu); } catch (_) {}\n' +
         '\t\t\t}';
     source = source.slice(0, insertAt) + trayPatch + source.slice(insertAt);
+    markRequired('trayContextMenu', true);
 
     // Fix 3 (Linux): the tray icon renders as a missing-image placeholder
     // (exclamation mark on Mint/Cinnamon) because upstream hands
@@ -468,6 +503,9 @@ if (source.includes(marker)) {
         source = source.slice(0, trayIdx2)
             + trayConstructReplacement
             + source.slice(trayIdx2 + trayConstruct.length);
+        markRequired('trayIconPath', true);
+    } else {
+        markRequired('trayIconPath', false);
     }
 
     // -----------------------------------------------------------------------
@@ -488,10 +526,10 @@ if (source.includes(marker)) {
     // (No change needed — the marker is already just { frame: false })
 
     // Inject window control buttons after ready-to-show
-    const readyToShowMarker = 'windowLog.info("[WindowManager] Window ready to show");';
-    const readyToShowIdx = source.indexOf(readyToShowMarker);
-    if (readyToShowIdx >= 0) {
-        const afterReady = readyToShowIdx + readyToShowMarker.length;
+    const readyToShowRe = /windowLog\.info\((?:"\[WindowManager\] Window ready to show"|`\[WindowManager\] Window ready to show[^`]*`)\);/;
+    const readyToShowMatch = source.match(readyToShowRe);
+    if (readyToShowMatch) {
+        const afterReady = readyToShowMatch.index + readyToShowMatch[0].length;
         const windowControlsInjection = `
                         // [wb-linux-patch] Inject window control buttons on Linux
                         if (process.platform === "linux" && this.mainWindow) {
@@ -557,6 +595,9 @@ if (source.includes(marker)) {
                                 });
                         }`;
         source = source.slice(0, afterReady) + windowControlsInjection + source.slice(afterReady);
+        markOptional('windowControls', true);
+    } else {
+        markOptional('windowControls', false);
     }
 
     // -----------------------------------------------------------------------
@@ -583,6 +624,9 @@ if (source.includes(marker)) {
         source = source.slice(0, updateMenuIdx)
             + linuxUpdateShim
             + source.slice(updateMenuIdx + updateMenuMarker.length);
+        markRequired('updateMenuDisabled', true);
+    } else {
+        markRequired('updateMenuDisabled', false);
     }
 
     // Neutralize updateCheck / updateDownload / updateQuitAndInstall RPCs
@@ -605,6 +649,9 @@ if (source.includes(marker)) {
         source = source.slice(0, updateRpcIdx)
             + linuxRpcShim
             + source.slice(updateRpcIdx + updateRpcMarker.length);
+        markRequired('updateRpcDisabled', true);
+    } else {
+        markRequired('updateRpcDisabled', false);
     }
 
     // Also stub out UpdateServiceLinux.checkForUpdates so the automatic
@@ -619,11 +666,364 @@ if (source.includes(marker)) {
             const afterCheck = checkMethodIdx + checkMethodMarker.length;
             const earlyReturn = '\n\t\t\t\t\t// [wb-linux-patch] Auto-update disabled on Linux port\n\t\t\t\t\treturn;\n';
             source = source.slice(0, afterCheck) + earlyReturn + source.slice(afterCheck);
+            markRequired('updateServiceDisabled', true);
+        } else {
+            markRequired('updateServiceDisabled', false);
+        }
+    } else {
+        markRequired('updateServiceDisabled', false);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fix 7 (Linux stability): wrap several main-process awaits with a
+    // race-against-timeout fallback. None of these are functional changes
+    // upstream relies on; they exist purely to keep the UI thread from
+    // wedging on Linux when child_process.exec timeouts misfire or when
+    // BinaryManager.doInitialize() ends up in a permanently pending state.
+    //
+    // Symptoms observed on Linux Mint 22.3 / CachyOS that motivated each
+    // sub-patch:
+    //
+    //   * BinaryManager.doInitialize() occasionally stays pending forever
+    //     (registry.json 24h cache hit still blocks). prepareNodeRuntimeEnv()
+    //     awaits the same initPromise, so every connect() that needs Node
+    //     runtime injection (cloudbase / tcb / etc.) hits the upstream 122s
+    //     stdio-MCP connect timeout before ever spawning the server.
+    //
+    //   * child_process.exec()'s `timeout` option sometimes does NOT fire on
+    //     Electron+Linux for hung children. We've measured `which 'tcb'` not
+    //     returning for 80s+, blocking the connector preAuth flow and the
+    //     entire stdio MCP startup sequence (UI shows "connecting" forever).
+    //
+    //   * userPromptComposer / runtimeConfigResolver wait on remote
+    //     "collectors / waitConfiguration" RPCs that can hang on first launch
+    //     before the renderer has registered its handlers. Without a race
+    //     fallback the very first chat message blocks indefinitely.
+    //
+    // All patches are markOptional (graceful degradation: if the upstream
+    // shape changes between WorkBuddy releases, we log a warning, fall back
+    // to the unpatched behaviour, and let the rest of the patches continue).
+    // -----------------------------------------------------------------------
+
+    // Patch 7A: ConnectorMcpProxy.maybeInjectNodeRuntime — 5s race so a
+    // hung BinaryManager.ensure() can't block stdio MCP startup. On timeout
+    // we fall through to the existing "inherited PATH" path that the catch
+    // block already implements.
+    const mcpInjectFrom =
+        '\t\t\ttry {\n' +
+        '\t\t\t\tconst prepared = await prepareNodeRuntimeEnv(this.binaryManager, {\n' +
+        '\t\t\t\t\tversionRange: runtime?.version ?? "*",\n' +
+        '\t\t\t\t\tregistry: serverConfig.npmRegistries?.[0] ?? serverConfig.npmRegistry\n' +
+        '\t\t\t\t}, this.logger, { silent });\n' +
+        '\t\t\t\tapplyNodeRuntimeEnv(env, prepared);\n' +
+        '\t\t\t\tthis.logger.info(`[ConnectorMcpProxy] stdio MCP ${configId} Node runtime injected: command=${command} version=${prepared.nodeInfo.version} source=${prepared.nodeInfo.source}`);\n' +
+        '\t\t\t} catch (err) {\n' +
+        '\t\t\t\tthis.logger.warn(`[ConnectorMcpProxy] stdio MCP ${configId} Node runtime preparation failed; falling back to inherited PATH: ${err instanceof Error ? err.message : String(err)}`);\n' +
+        '\t\t\t}';
+    const mcpInjectTo =
+        '\t\t\ttry {\n' +
+        '\t\t\t\t// [wb-linux] BinaryManager.doInitialize() 在某些环境会永远 pending\n' +
+        '\t\t\t\t// （registry.json 1440min cache 命中也照样阻塞），后续 ensure() 会一直 await\n' +
+        '\t\t\t\t// 同一个 pending initPromise，把 stdio 启动卡到 connect timeout 122s。\n' +
+        '\t\t\t\t// 5s race 后兜底走继承 PATH（系统 node 已在 PATH 上），跟原有 catch 语义一致。\n' +
+        '\t\t\t\tconst wbStart = Date.now();\n' +
+        '\t\t\t\tconst wbPrepP = prepareNodeRuntimeEnv(this.binaryManager, {\n' +
+        '\t\t\t\t\tversionRange: runtime?.version ?? "*",\n' +
+        '\t\t\t\t\tregistry: serverConfig.npmRegistries?.[0] ?? serverConfig.npmRegistry\n' +
+        '\t\t\t\t}, this.logger, { silent });\n' +
+        '\t\t\t\tlet wbTimer;\n' +
+        '\t\t\t\tconst wbTimeoutP = new Promise((res) => { wbTimer = setTimeout(() => res({ __wbTimeout: true }), 5000); });\n' +
+        '\t\t\t\tconst wbResult = await Promise.race([wbPrepP, wbTimeoutP]);\n' +
+        '\t\t\t\tclearTimeout(wbTimer);\n' +
+        '\t\t\t\tif (wbResult && wbResult.__wbTimeout) {\n' +
+        '\t\t\t\t\ttry { this.logger.warn(`[wb-linux][ConnectorMcpProxy] stdio MCP ${configId} prepareNodeRuntimeEnv timeout 5s; falling back to inherited PATH (command=${command})`); } catch {}\n' +
+        '\t\t\t\t\twbPrepP.then(() => {}, () => {});\n' +
+        '\t\t\t\t\treturn;\n' +
+        '\t\t\t\t}\n' +
+        '\t\t\t\tapplyNodeRuntimeEnv(env, wbResult);\n' +
+        '\t\t\t\tthis.logger.info(`[ConnectorMcpProxy] stdio MCP ${configId} Node runtime injected in ${Date.now() - wbStart}ms: command=${command} version=${wbResult.nodeInfo.version} source=${wbResult.nodeInfo.source}`);\n' +
+        '\t\t\t} catch (err) {\n' +
+        '\t\t\t\tthis.logger.warn(`[ConnectorMcpProxy] stdio MCP ${configId} Node runtime preparation failed; falling back to inherited PATH: ${err instanceof Error ? err.message : String(err)}`);\n' +
+        '\t\t\t}';
+    {
+        const idx = source.indexOf(mcpInjectFrom);
+        if (idx >= 0) {
+            source = source.slice(0, idx) + mcpInjectTo + source.slice(idx + mcpInjectFrom.length);
+            markOptional('mcpInjectNodeRuntimeTimeout', true);
+        } else {
+            console.error('[apply-linux-patches] ERROR: mcpInjectNodeRuntimeTimeout anchor not found; skipping (stdio MCP startup may stall on hung BinaryManager)');
+            markOptional('mcpInjectNodeRuntimeTimeout', false);
+        }
+    }
+
+    // Patch 7B: ConnectorCliExecutor.buildCommandEnv — same 5s race for
+    // the CLI preAuth path (tcb / cnpm etc.). Without this, runPreCliAuth()
+    // blocks for the upstream 122s connect timeout when BinaryManager is
+    // wedged.
+    const cliBuildEnvFrom =
+        '\t\t\tapplyNodeRuntimeEnv(env, await prepareNodeRuntimeEnv(this.binaryManager, {\n' +
+        '\t\t\t\tversionRange: cliConfig.runtime.version ?? "*",\n' +
+        '\t\t\t\tregistry: registry ?? cliConfig.npmRegistry\n' +
+        '\t\t\t}, this.logger, { silent: options.silent === true }));\n' +
+        '\t\t\tapplyCliConfigEnv(env, cliConfig.env);\n' +
+        '\t\t\treturn env;';
+    const cliBuildEnvTo =
+        '\t\t\t// [wb-linux] 同 ConnectorMcpProxy.maybeInjectNodeRuntime：BinaryManager\n' +
+        '\t\t\t// 初始化偶发永久 pending，会让 preAuth CLI 路径（tcb 等）卡到上游 connect timeout。\n' +
+        '\t\t\t// 5s race 兜底走继承 PATH（系统 node 已就绪）。\n' +
+        '\t\t\tconst wbPrepP = prepareNodeRuntimeEnv(this.binaryManager, {\n' +
+        '\t\t\t\tversionRange: cliConfig.runtime.version ?? "*",\n' +
+        '\t\t\t\tregistry: registry ?? cliConfig.npmRegistry\n' +
+        '\t\t\t}, this.logger, { silent: options.silent === true });\n' +
+        '\t\t\tlet wbTimer;\n' +
+        '\t\t\tconst wbTimeoutP = new Promise((res) => { wbTimer = setTimeout(() => res({ __wbTimeout: true }), 5000); });\n' +
+        '\t\t\tconst wbResult = await Promise.race([wbPrepP, wbTimeoutP]);\n' +
+        '\t\t\tclearTimeout(wbTimer);\n' +
+        '\t\t\tif (wbResult && wbResult.__wbTimeout) {\n' +
+        '\t\t\t\ttry { this.logger.warn("[wb-linux][CliExecutor] prepareNodeRuntimeEnv timeout 5s; falling back to inherited PATH"); } catch {}\n' +
+        '\t\t\t\twbPrepP.then(() => {}, () => {});\n' +
+        '\t\t\t\tapplyCliConfigEnv(env, cliConfig.env);\n' +
+        '\t\t\t\treturn env;\n' +
+        '\t\t\t}\n' +
+        '\t\t\tapplyNodeRuntimeEnv(env, wbResult);\n' +
+        '\t\t\tapplyCliConfigEnv(env, cliConfig.env);\n' +
+        '\t\t\treturn env;';
+    {
+        const idx = source.indexOf(cliBuildEnvFrom);
+        if (idx >= 0) {
+            source = source.slice(0, idx) + cliBuildEnvTo + source.slice(idx + cliBuildEnvFrom.length);
+            markOptional('cliBuildCommandEnvTimeout', true);
+        } else {
+            console.error('[apply-linux-patches] ERROR: cliBuildCommandEnvTimeout anchor not found; skipping (CLI preAuth may stall on hung BinaryManager)');
+            markOptional('cliBuildCommandEnvTimeout', false);
+        }
+    }
+
+    // Patch 7C: CliExecutor.isCliInstalled — 6s hard timeout via
+    // Promise.race because child_process.exec()'s own `timeout` option does
+    // not always fire on Electron+Linux for processes stuck in syscalls
+    // (observed: `which 'tcb'` not returning for 80s+, freezing the UI).
+    // We treat the timeout as "not installed" so the upper layer falls
+    // through to the install path or surfaces a friendly error instead of
+    // wedging the connector pipeline.
+    const cliIsInstalledFrom =
+        '\t\t\ttry {\n' +
+        '\t\t\t\tconst env = await this.buildCommandEnv(cliConfig, options);\n' +
+        '\t\t\t\tthis.logger.info(`[CliExecutor] isCliInstalled: platform=${(0, os.platform)()} checkCmd=${checkCmd} windowsHide=true`);\n' +
+        '\t\t\t\tawait execAsync$1(checkCmd, {\n' +
+        '\t\t\t\t\ttimeout: 5e3,\n' +
+        '\t\t\t\t\tenv,\n' +
+        '\t\t\t\t\twindowsHide: true\n' +
+        '\t\t\t\t});\n' +
+        '\t\t\t\treturn true;\n' +
+        '\t\t\t} catch {\n' +
+        '\t\t\t\treturn false;\n' +
+        '\t\t\t}';
+    const cliIsInstalledTo =
+        '\t\t\ttry {\n' +
+        '\t\t\t\tconst env = await this.buildCommandEnv(cliConfig, options);\n' +
+        '\t\t\t\tthis.logger.info(`[CliExecutor] isCliInstalled: platform=${(0, os.platform)()} checkCmd=${checkCmd} windowsHide=true`);\n' +
+        '\t\t\t\t// [wb-linux] 在某些 Electron + Linux 环境下 child_process.exec 的 timeout\n' +
+        '\t\t\t\t// 对 hang 住的子进程不生效（已观察到 which \'tcb\' 80s+ 不返回，UI 卡死）。\n' +
+        '\t\t\t\t// 用 Promise.race 兜底：6s 还没结果就当成"未安装"，让上层走 install 路径\n' +
+        '\t\t\t\t// 或直接报错，绝不阻塞 UI。\n' +
+        '\t\t\t\tconst wbExecP = execAsync$1(checkCmd, { timeout: 5e3, env, windowsHide: true });\n' +
+        '\t\t\t\tlet wbTimer;\n' +
+        '\t\t\t\tconst wbTimeoutP = new Promise((_, rej) => { wbTimer = setTimeout(() => rej(new Error("[wb-linux] isCliInstalled hard timeout 6s")), 6000); });\n' +
+        '\t\t\t\ttry {\n' +
+        '\t\t\t\t\tawait Promise.race([wbExecP, wbTimeoutP]);\n' +
+        '\t\t\t\t} finally {\n' +
+        '\t\t\t\t\tclearTimeout(wbTimer);\n' +
+        '\t\t\t\t\twbExecP.then(() => {}, () => {});\n' +
+        '\t\t\t\t}\n' +
+        '\t\t\t\treturn true;\n' +
+        '\t\t\t} catch (err) {\n' +
+        '\t\t\t\ttry { if (err && /wb-linux/.test(String(err.message ?? err))) this.logger.warn(`[wb-linux][CliExecutor] isCliInstalled hard timeout for ${checkCmd}; treating as not installed`); } catch {}\n' +
+        '\t\t\t\treturn false;\n' +
+        '\t\t\t}';
+    {
+        const idx = source.indexOf(cliIsInstalledFrom);
+        if (idx >= 0) {
+            source = source.slice(0, idx) + cliIsInstalledTo + source.slice(idx + cliIsInstalledFrom.length);
+            markOptional('cliIsCliInstalledTimeout', true);
+        } else {
+            console.error('[apply-linux-patches] ERROR: cliIsCliInstalledTimeout anchor not found; skipping (which/where check may hang indefinitely on Linux)');
+            markOptional('cliIsCliInstalledTimeout', false);
+        }
+    }
+
+    // Patch 7D: ConnectorService.connect — wrap runPreCliAuth() in a 30s
+    // race so a hung CLI auth flow can't block stdio MCP startup. preAuth
+    // is only used to prime CLI login state; the stdio MCP server does
+    // not strictly depend on it, so on timeout we proceed with startup
+    // anyway. The function name `connect` is too common for a direct
+    // anchor, so we pin on the unique runPreCliAuth call site and walk
+    // back to the enclosing `if (connectorConfig?.cliConfig)`.
+    {
+        const preAuthCall = 'await this.runPreCliAuth(configId, connectorConfig, signal);';
+        const callIdx = source.indexOf(preAuthCall);
+        if (callIdx >= 0) {
+            // Walk back to find the enclosing `if (connectorConfig?.cliConfig) {`
+            const ifMarker = 'if (connectorConfig?.cliConfig) {';
+            const ifIdx = source.lastIndexOf(ifMarker, callIdx);
+            // Walk forward to find the matching close `}` of that if block.
+            // Within an esbuild minified-but-pretty output the body is exactly:
+            //   if (connectorConfig?.cliConfig) {\n
+            //   \t...const preAuthResult = await this.runPreCliAuth(...);\n
+            //   \t...if (!preAuthResult.success) return preAuthResult;\n
+            //   \t...}\n
+            // so we look for the next `if (!preAuthResult.success) return preAuthResult;`
+            // and the closing brace that follows it on the next line.
+            const successCheck = 'if (!preAuthResult.success) return preAuthResult;';
+            const successIdx = source.indexOf(successCheck, callIdx);
+            if (ifIdx >= 0 && successIdx >= 0 && successIdx - callIdx < 200) {
+                // Find the closing `}` after successCheck (skip whitespace + newline).
+                let endIdx = successIdx + successCheck.length;
+                while (endIdx < source.length && /[\s]/.test(source[endIdx])) endIdx++;
+                if (source[endIdx] === '}') endIdx++;
+                else endIdx = -1;
+                if (endIdx > 0) {
+                    // Detect the indentation prefix used on the `if (...)` line so
+                    // the replacement uses the same level (works for both `\t\t\t\t`
+                    // and `\t\t\t` and arbitrary tab depth).
+                    let indentStart = ifIdx;
+                    while (indentStart > 0 && (source[indentStart - 1] === '\t' || source[indentStart - 1] === ' ')) indentStart--;
+                    const indent = source.slice(indentStart, ifIdx);
+                    const replacement =
+                        indent + 'if (connectorConfig?.cliConfig) {\n' +
+                        indent + '\t// [wb-linux] runPreCliAuth 内部 child_process.exec 在 Electron+Linux\n' +
+                        indent + '\t// 偶发 hang 不响应 timeout（已观察到 which \'tcb\' 80s+ 不返回，UI 卡死）。\n' +
+                        indent + '\t// 整体 race 30s 超时；超时后跳过 preAuth 继续 stdio MCP 启动 ——\n' +
+                        indent + '\t// preAuth 仅为 CLI 登录态准备，stdio MCP server 自身不强依赖。\n' +
+                        indent + '\tconst wbPreP = this.runPreCliAuth(configId, connectorConfig, signal);\n' +
+                        indent + '\tlet wbTimer;\n' +
+                        indent + '\tconst wbTimeoutP = new Promise((res) => { wbTimer = setTimeout(() => res({ __wbTimeout: true }), 30000); });\n' +
+                        indent + '\tconst preAuthResult = await Promise.race([wbPreP, wbTimeoutP]);\n' +
+                        indent + '\tclearTimeout(wbTimer);\n' +
+                        indent + '\tif (preAuthResult && preAuthResult.__wbTimeout) {\n' +
+                        indent + '\t\ttry { this.logger.warn(`[wb-linux][ConnectorService] runPreCliAuth(${configId}) timeout 30s; skipping preAuth and continuing with stdio MCP startup`); } catch {}\n' +
+                        indent + '\t\twbPreP.then(() => {}, () => {});\n' +
+                        indent + '\t} else if (!preAuthResult.success) return preAuthResult;\n' +
+                        indent + '}';
+                    source = source.slice(0, indentStart) + replacement + source.slice(endIdx);
+                    markOptional('connectorPreAuthTimeout', true);
+                } else {
+                    console.error('[apply-linux-patches] ERROR: connectorPreAuthTimeout end-brace not found; skipping');
+                    markOptional('connectorPreAuthTimeout', false);
+                }
+            } else {
+                console.error('[apply-linux-patches] ERROR: connectorPreAuthTimeout if/successCheck not found near runPreCliAuth call; skipping');
+                markOptional('connectorPreAuthTimeout', false);
+            }
+        } else {
+            console.error('[apply-linux-patches] ERROR: connectorPreAuthTimeout runPreCliAuth call not found; skipping (CLI preAuth may stall the connect pipeline)');
+            markOptional('connectorPreAuthTimeout', false);
+        }
+    }
+
+    // Patch 7E: SessionManager.composePromptForBackend — 5s race + raw
+    // prompt fallback so the very first chat message can't hang on the
+    // remote userPromptComposer (collectors / waitConfiguration).
+    const composeFrom =
+        '\tasync composePromptForBackend(session, prompt, _meta) {\n' +
+        '\t\tif (!this.userPromptComposer || !Array.isArray(prompt) || prompt.length === 0) return prompt;\n' +
+        '\t\tawait this.userPromptComposerReady;\n' +
+        '\t\treturn this.userPromptComposer.composeUserPrompt({\n' +
+        '\t\t\tsessionId: session.sessionId,\n' +
+        '\t\t\tcwd: session.cwd,\n' +
+        '\t\t\tdesiredConfig: cloneDesiredConfig(session.desiredConfig),\n' +
+        '\t\t\tprompt: structuredClone(prompt),\n' +
+        '\t\t\t_meta: _meta ? structuredClone(_meta) : void 0,\n' +
+        '\t\t\thasPriorUserMessages: sessionHasPriorUserMessages(session)\n' +
+        '\t\t});\n' +
+        '\t}';
+    const composeTo =
+        '\tasync composePromptForBackend(session, prompt, _meta) {\n' +
+        '\t\tif (!this.userPromptComposer || !Array.isArray(prompt) || prompt.length === 0) return prompt;\n' +
+        '\t\tawait this.userPromptComposerReady;\n' +
+        '\t\t// [wb-linux] 5s race + fallback to original prompt to avoid hang in user prompt composition (collectors / waitConfiguration)\n' +
+        '\t\tconst wbStart = Date.now();\n' +
+        '\t\tconst wbComposeP = this.userPromptComposer.composeUserPrompt({\n' +
+        '\t\t\tsessionId: session.sessionId,\n' +
+        '\t\t\tcwd: session.cwd,\n' +
+        '\t\t\tdesiredConfig: cloneDesiredConfig(session.desiredConfig),\n' +
+        '\t\t\tprompt: structuredClone(prompt),\n' +
+        '\t\t\t_meta: _meta ? structuredClone(_meta) : void 0,\n' +
+        '\t\t\thasPriorUserMessages: sessionHasPriorUserMessages(session)\n' +
+        '\t\t});\n' +
+        '\t\tlet wbTimer;\n' +
+        '\t\tconst wbTimeoutP = new Promise((res) => { wbTimer = setTimeout(() => res({ __wbTimeout: true }), 5000); });\n' +
+        '\t\tconst wbResult = await Promise.race([wbComposeP, wbTimeoutP]);\n' +
+        '\t\tclearTimeout(wbTimer);\n' +
+        '\t\tif (wbResult && wbResult.__wbTimeout) {\n' +
+        '\t\t\ttry { console.warn(`[wb-linux] composePromptForBackend timeout 5s sessionId=${session.sessionId}, falling back to raw prompt`); } catch {}\n' +
+        '\t\t\twbComposeP.then(() => {}, () => {});\n' +
+        '\t\t\treturn prompt;\n' +
+        '\t\t}\n' +
+        '\t\ttry { console.log(`[wb-linux] composePromptForBackend done in ${Date.now() - wbStart}ms sessionId=${session.sessionId}`); } catch {}\n' +
+        '\t\treturn wbResult;\n' +
+        '\t}';
+    {
+        const idx = source.indexOf(composeFrom);
+        if (idx >= 0) {
+            source = source.slice(0, idx) + composeTo + source.slice(idx + composeFrom.length);
+            markOptional('composePromptForBackendTimeout', true);
+        } else {
+            console.error('[apply-linux-patches] ERROR: composePromptForBackendTimeout anchor not found; skipping (first chat message may hang)');
+            markOptional('composePromptForBackendTimeout', false);
+        }
+    }
+
+    // Patch 7F: SessionManager.resolveRuntimeConfig — 5s race + local
+    // desiredConfig fallback so first launch doesn't block on a remote
+    // runtimeConfigResolver that hasn't booted yet.
+    const resolveFrom =
+        '\tasync resolveRuntimeConfig(args) {\n' +
+        '\t\tif (!this.runtimeConfigResolver) return buildFallbackRuntimeConfig(args.desiredConfig);\n' +
+        '\t\treturn cloneResolvedRuntimeConfig(await this.runtimeConfigResolver.resolveConfig({\n' +
+        '\t\t\tsessionId: args.sessionId,\n' +
+        '\t\t\tcwd: args.cwd,\n' +
+        '\t\t\tdesiredConfig: cloneDesiredConfig(args.desiredConfig),\n' +
+        '\t\t\tcurrentRuntimeConfig: args.currentRuntimeConfig ?? null\n' +
+        '\t\t}));\n' +
+        '\t}';
+    const resolveTo =
+        '\tasync resolveRuntimeConfig(args) {\n' +
+        '\t\tif (!this.runtimeConfigResolver) return buildFallbackRuntimeConfig(args.desiredConfig);\n' +
+        '\t\t// [wb-linux] 5s race + fallback to avoid hang in resolveConfig (collectors / waitConfiguration)\n' +
+        '\t\tconst wbStart = Date.now();\n' +
+        '\t\tconst wbResolveP = this.runtimeConfigResolver.resolveConfig({\n' +
+        '\t\t\tsessionId: args.sessionId,\n' +
+        '\t\t\tcwd: args.cwd,\n' +
+        '\t\t\tdesiredConfig: cloneDesiredConfig(args.desiredConfig),\n' +
+        '\t\t\tcurrentRuntimeConfig: args.currentRuntimeConfig ?? null\n' +
+        '\t\t});\n' +
+        '\t\tlet wbTimer;\n' +
+        '\t\tconst wbTimeoutP = new Promise((res) => { wbTimer = setTimeout(() => res({ __wbTimeout: true }), 5000); });\n' +
+        '\t\tconst wbResult = await Promise.race([wbResolveP, wbTimeoutP]);\n' +
+        '\t\tclearTimeout(wbTimer);\n' +
+        '\t\tif (wbResult && wbResult.__wbTimeout) {\n' +
+        '\t\t\ttry { console.warn(`[wb-linux] resolveConfig timeout 5s sessionId=${args.sessionId} cwd=${args.cwd}, falling back to local desiredConfig`); } catch {}\n' +
+        '\t\t\t// fire-and-forget the original promise to avoid unhandled rejection\n' +
+        '\t\t\twbResolveP.then(() => {}, () => {});\n' +
+        '\t\t\treturn buildFallbackRuntimeConfig(args.desiredConfig);\n' +
+        '\t\t}\n' +
+        '\t\ttry { console.log(`[wb-linux] resolveConfig done in ${Date.now() - wbStart}ms sessionId=${args.sessionId}`); } catch {}\n' +
+        '\t\treturn cloneResolvedRuntimeConfig(wbResult);\n' +
+        '\t}';
+    {
+        const idx = source.indexOf(resolveFrom);
+        if (idx >= 0) {
+            source = source.slice(0, idx) + resolveTo + source.slice(idx + resolveFrom.length);
+            markOptional('resolveRuntimeConfigTimeout', true);
+        } else {
+            console.error('[apply-linux-patches] ERROR: resolveRuntimeConfigTimeout anchor not found; skipping (first session start may hang)');
+            markOptional('resolveRuntimeConfigTimeout', false);
         }
     }
 
     fs.writeFileSync(indexPath, source);
-    log('patched main/index.js (env shim + tray context menu + tray icon path + disabled updater)');
+    log('patched main/index.js (env shim + tray context menu + tray icon path + disabled updater + linux stability timeouts)');
 }
 
 // ---------------------------------------------------------------------------
@@ -642,23 +1042,97 @@ if (fs.existsSync(sidecarEntryPath)) {
         sidecarSource = SHIM_BODY + sidecarSource;
         fs.writeFileSync(sidecarEntryPath, sidecarSource);
         log('patched main/sidecar-entry.js (env shim)');
+        markRequired('sidecarEnvShim', true);
     } else {
         log('marker already present in main/sidecar-entry.js; skipping');
+        markRequired('sidecarEnvShim', true);
+    }
+} else {
+    markRequired('sidecarEnvShim', false);
+}
+
+function patchCliDistCodebuddy() {
+    const codebuddyPath = path.join(unpackedSiblingDir, 'cli', 'dist', 'codebuddy.js');
+    if (!fs.existsSync(codebuddyPath)) {
+        markOptional('cliExtensionPathObjectCompat', false);
+        return;
+    }
+
+    let cliSource = fs.readFileSync(codebuddyPath, 'utf8');
+    const replacements = [
+        {
+            from: 'for(let eg of ec){let ec=(0,AF.join)(eA,eg);if(!await this.pathExists(ec)){this.logger.warn(`Agent path not found: ${ec}`);continue}',
+            to: 'for(let eg of ec){let e$="string"==typeof eg?eg:eg&&"string"==typeof eg.path?eg.path:eg&&"string"==typeof eg.source?eg.source:void 0;if(!e$){this.logger.warn(`Invalid agent path entry: ${JSON.stringify(eg)}`);continue}let ec=(0,AF.join)(eA,e$);if(!await this.pathExists(ec)){this.logger.warn(`Agent path not found: ${ec}`);continue}'
+        },
+        {
+            from: 'for(let eg of ec){let ec=(0,AF.join)(eA,eg);if(!await this.pathExists(ec)){this.logger.warn(`Command path not found: ${ec}`);continue}',
+            to: 'for(let eg of ec){let e$="string"==typeof eg?eg:eg&&"string"==typeof eg.path?eg.path:eg&&"string"==typeof eg.source?eg.source:void 0;if(!e$){this.logger.warn(`Invalid command path entry: ${JSON.stringify(eg)}`);continue}let ec=(0,AF.join)(eA,e$);if(!await this.pathExists(ec)){this.logger.warn(`Command path not found: ${ec}`);continue}'
+        },
+        {
+            from: 'for(let eg of ec){let ec=(0,AF.join)(eA,eg);if(!await this.pathExists(ec)){this.logger.warn(`Skill path not found: ${ec}`);continue}',
+            to: 'for(let eg of ec){let e$="string"==typeof eg?eg:eg&&"string"==typeof eg.path?eg.path:eg&&"string"==typeof eg.source?eg.source:void 0;if(!e$){this.logger.warn(`Invalid skill path entry: ${JSON.stringify(eg)}`);continue}let ec=(0,AF.join)(eA,e$);if(!await this.pathExists(ec)){this.logger.warn(`Skill path not found: ${ec}`);continue}'
+        },
+        {
+            from: 'async deserializeSessionFromJsonl(eA,el){let ec=this.getSessionFilePath(eA),eu=await this.deserializeSessionFromPath(ec,el);if(eu)return eu;if(eA.startsWith("agent-")){let ec=this.getStorageDir();try{for(let ed of(await tE.readdir(ec,{withFileTypes:!0}))){if(!ed.isDirectory())continue;let eg=tC.join(ec,ed.name,"subagents"),ep=tC.join(eg,`${eA}.jsonl`);try{if(await tE.access(ep),eu=await this.deserializeSessionFromPath(ep,el))return eu}catch{continue}}}catch{}}}async deserializeSessionFromPath',
+            to: 'async deserializeSessionFromJsonl(eA,el){let ec=this.getSessionFilePath(eA),eu=await this.deserializeSessionFromPath(ec,el);if(eu)return eu;if(eA.startsWith("agent-")){let ec=this.getStorageDir();try{for(let ed of(await tE.readdir(ec,{withFileTypes:!0}))){if(!ed.isDirectory())continue;let eg=tC.join(ec,ed.name,"subagents"),ep=tC.join(eg,`${eA}.jsonl`);try{if(await tE.access(ep),eu=await this.deserializeSessionFromPath(ep,el))return eu}catch{continue}}}catch{}}try{let ec=tp.PathUtils.getHomeProjectsDir();for(let ed of await tE.readdir(ec,{withFileTypes:!0})){if(!ed.isDirectory())continue;let eg=tC.join(ec,ed.name,`${eA}.jsonl`);try{if(await tE.access(eg),eu=await this.deserializeSessionFromPath(eg,el))return eu}catch{continue}}}catch{}}async deserializeSessionFromPath'
+        },
+        // Linux fix: McpManager.getConnectedServers always applies a timeout
+        // (not just in non-interactive mode). Otherwise a stuck MCP server
+        // makes Agent.buildMcpServers() (called on every prompt) hang forever
+        // and the UI stays at "preparing". The original code only races with
+        // a timeout when isNonInteractiveMode() is true.
+        {
+            from: 'async getConnectedServers(){if(this.isNonInteractiveMode())try{await A$.McpUtils.raceWithTimeout(this.allServersSettledDeferred.promise,()=>{this.logger.warn("MCP servers did not settle within timeout, proceeding with available servers"),this.allServersSettledDeferred.resolve()})}catch(eA){this.logger.debug("Failed to wait for servers to settle:",eA.message)}return this.connectedServersCache}',
+            to: 'async getConnectedServers(){try{await A$.McpUtils.raceWithTimeout(this.allServersSettledDeferred.promise,()=>{this.logger.warn("[wb-linux] MCP servers did not settle within timeout, proceeding with available servers"),this.allServersSettledDeferred.resolve()})}catch(eA){this.logger.debug("Failed to wait for servers to settle:",eA.message)}return this.connectedServersCache}'
+        }
+    ];
+
+    let patched = 0;
+    for (const { from, to } of replacements) {
+        if (cliSource.includes(to)) {
+            patched++;
+            continue;
+        }
+        if (cliSource.includes(from)) {
+            cliSource = cliSource.replace(from, to);
+            patched++;
+        }
+    }
+
+    if (patched === replacements.length) {
+        fs.writeFileSync(codebuddyPath, cliSource);
+        log('patched cli/dist/codebuddy.js (extension path object compatibility, session replay fallback, MCP settle timeout in interactive mode)');
+        markOptional('cliExtensionPathObjectCompat', true);
+        markOptional('cliSessionReplayAcrossProjectsFallback', true);
+        markOptional('cliMcpSettleTimeoutInteractive', true);
+    } else {
+        markOptional('cliExtensionPathObjectCompat', false);
+        markOptional('cliSessionReplayAcrossProjectsFallback', false);
+        markOptional('cliMcpSettleTimeoutInteractive', false);
+        console.warn('[apply-linux-patches] failed to patch all cli compatibility points: ' + patched + '/' + replacements.length);
     }
 }
 
+patchCliDistCodebuddy();
+
 // ---------------------------------------------------------------------------
-// Ensure @lydell/node-pty-linux-x64 is present in the asar's node_modules
-// so that require("@lydell/node-pty-linux-x64") resolves from within the
+// Ensure the Linux @lydell/node-pty platform package is present in the asar's node_modules
+// so that require("@lydell/node-pty-linux-*") resolves from within the
 // asar. The package lives on disk in app.asar.unpacked/node_modules/ but
 // was never registered in the original macOS asar header. We copy it into
 // the tmpDir so the repack step includes it as an unpacked entry.
 // ---------------------------------------------------------------------------
-const lydellLinuxSrc = path.join(unpackedSiblingDir, 'node_modules', '@lydell', 'node-pty-linux-x64');
-const lydellLinuxDst = path.join(tmpDir, 'node_modules', '@lydell', 'node-pty-linux-x64');
+const lydellPackageBasename = lydellPlatformPackage.split('/')[1];
+const lydellLinuxSrc = path.join(unpackedSiblingDir, 'node_modules', '@lydell', lydellPackageBasename);
+const lydellLinuxDst = path.join(tmpDir, 'node_modules', '@lydell', lydellPackageBasename);
 if (fs.existsSync(lydellLinuxSrc) && !fs.existsSync(lydellLinuxDst)) {
     fs.cpSync(lydellLinuxSrc, lydellLinuxDst, { recursive: true });
-    log('copied @lydell/node-pty-linux-x64 into asar source for repack');
+    log('copied ' + lydellPlatformPackage + ' into asar source for repack');
+    markRequired('lydellPlatformPackageRegistered', true);
+} else if (fs.existsSync(lydellLinuxDst)) {
+    markRequired('lydellPlatformPackageRegistered', true);
+} else {
+    markRequired('lydellPlatformPackageRegistered', false);
 }
 
 // ---------------------------------------------------------------------------
@@ -724,7 +1198,7 @@ function collectFullyUnpackedDirs() {
 const fullyUnpackedDirs = collectFullyUnpackedDirs();
 // Also include any Linux platform packages we injected into the tmpDir
 // that weren't in the original macOS header.
-const extraUnpackDirs = ['node_modules/@lydell/node-pty-linux-x64'];
+const extraUnpackDirs = ['node_modules/@lydell/' + lydellPackageBasename];
 for (const d of extraUnpackDirs) {
     if (fs.existsSync(path.join(tmpDir, d)) && !fullyUnpackedDirs.includes(d)) {
         fullyUnpackedDirs.push(d);
@@ -770,6 +1244,8 @@ const unpackPattern = partialUnpackedFiles.length
     ).join(',') + '}'
     : undefined;
 
+assertRequiredPatches();
+
 // ---------------------------------------------------------------------------
 // Pack.
 //
@@ -809,6 +1285,14 @@ const unpackPattern = partialUnpackedFiles.length
     // correct and contains additional files (rebuilt native modules,
     // Linux binaries) that the staging dir does not have.
     try { fs.rmSync(stagingSidecar, { recursive: true, force: true }); } catch (_) {}
+
+    const reportPath = path.join(path.dirname(asarPath), '..', '.workbuddy-linux', 'patch-report.json');
+    try {
+        fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+        fs.writeFileSync(reportPath, JSON.stringify(patchReport, null, 2));
+    } catch (err) {
+        console.warn('[apply-linux-patches] failed to write patch report: ' + err.message);
+    }
 
     log('replaced app.asar in place (app.asar.unpacked left untouched)');
 })().catch(err => {

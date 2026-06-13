@@ -41,3 +41,5 @@ node_modules/
 Thumbs.db
 .vscode/
 .idea/
+docs/debug-agent-ready-hang.md
+docs/workbuddy-5-porting-plan.md
