@@ -115,6 +115,7 @@ WorkBuddy 基于 VS Code/Electron 开发，其 macOS 应用的 `app.asar` 文件
 1. **腾讯文档引擎失效**：官方 DMG 包内捆绑的 `@tencent/docs-engine` 仅提供了 macOS Arm64 架构的专有二进制库（`.dylib`）。Linux 无法运行此类文件且无源码可供重新编译，为防止底层引发 `dlopen invalid ELF header` 导致的主进程崩溃，转换脚本已将其强制移除。**影响**：应用内如果包含深度整合的腾讯文档协同编辑功能将不可用，不影响 AI 助手和本地代码编辑。
 2. **AI 代码沙盒降级**：内置 CLI 工具 `vendor/sandbox` 是腾讯内部私有的代码沙盒引擎（Tencent Sandbox），使用的是包含 Windows 和 macOS 格式的预编译隔离库。由于缺少 Linux 版沙盒核心，脚本已清理无关平台的二进制文件。**影响**：当 AI 助手尝试全自动执行代码时，会因为沙盒模块缺失而回退到无沙盒的真实终端中执行，或者提示安全环境不可用而拒绝执行自动化脚本。
 3. **自动更新不可用**：Linux 移植版已禁用应用内的"检查更新"功能（菜单项灰化、后台自动检查已关闭）。上游更新器依赖 macOS ShipIt / Windows Squirrel 安装器，在 Linux 上无法使用。如需更新，请手动下载新版官方 DMG 并重新执行构建流程。
+4. **WorkBuddy App / 小程序远程控制不可用**：官方移动端 WorkBuddy App 以及相关小程序的远程控制能力依赖上游官方服务对受支持桌面端的识别、配对和平台能力校验。Linux 移植版不是官方发布渠道，无法保证通过这些校验。**影响**：无法通过 WorkBuddy App 或小程序远程控制该 Linux 移植版桌面应用。
 
 ## 移植过程中已修复的问题
 
@@ -297,6 +298,7 @@ Due to upstream packaging characteristics and the presence of closed-source comm
 1. **Tencent Docs Engine Unavailable**: The bundled `@tencent/docs-engine` in the official DMG only provides a proprietary binary library (`.dylib`) for the macOS Arm64 architecture. Linux cannot run such files and there is no source code available for recompilation. To prevent the main process from crashing due to underlying `dlopen invalid ELF header` errors, the conversion script has forcibly removed it. **Impact**: Any deeply integrated Tencent Docs collaborative editing features within the app will be unavailable. This does not affect the AI assistant or local code editing.
 2. **AI Code Sandbox Degradation**: The built-in CLI tool `vendor/sandbox` is Tencent's proprietary code isolation engine (Tencent Sandbox), which uses precompiled isolation libraries formatted for Windows and macOS. Lacking a Linux sandbox core, the script has cleaned up these irrelevant platform binaries. **Impact**: When the AI assistant attempts to automatically execute code, it will either fall back to executing in a real terminal without a sandbox due to the missing sandbox module, or it will refuse to execute automated scripts, prompting that a secure environment is unavailable.
 3. **Auto-Update Disabled**: The Linux port has disabled the in-app "Check for Updates" feature (menu item greyed out, background auto-check disabled). The upstream updater relies on macOS ShipIt / Windows Squirrel installers which are not available on Linux. To update, manually download the latest official DMG and re-run the build process.
+4. **WorkBuddy App / Mini Program Remote Control Unavailable**: Remote control through the official mobile WorkBuddy App or related mini programs depends on upstream service-side recognition, pairing, and platform capability checks for officially supported desktop clients. This Linux port is not an official distribution channel and cannot guarantee passing those checks. **Impact**: The ported Linux desktop app cannot be remotely controlled through the WorkBuddy App or mini programs.
 
 ## Issues Fixed During Porting
 
