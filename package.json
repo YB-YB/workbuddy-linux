@@ -1,9 +1,9 @@
 {
   "private": true,
   "name": "@genie/workbuddy-desktop",
-  "version": "5.0.3",
+  "version": "5.1.1",
   "description": "WorkBuddy Desktop - AI Agent Desktop Application",
-  "author": "Tencent Technology (Shenzhen) Company Limited",
+  "author": "Tencent Technology (Shenzhen)",
   "main": "main/index.js",
   "dependencies": {
     "@opentelemetry/api": "^1.8.0",
@@ -37,5 +37,22 @@
     "@lydell/node-pty-win32-arm64": "1.2.0-beta.12",
     "@lydell/node-pty-win32-x64": "1.2.0-beta.12",
     "node-pty": "1.1.0"
-  }
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YB-YB/workbuddy-linux.git"
+  },
+  "keywords": [],
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/YB-YB/workbuddy-linux/issues"
+  },
+  "homepage": "https://github.com/YB-YB/workbuddy-linux#readme"
 }

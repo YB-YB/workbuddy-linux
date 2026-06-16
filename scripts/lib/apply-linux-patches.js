@@ -157,7 +157,7 @@ if (!fs.existsSync(indexPath)) {
 
 let source = fs.readFileSync(indexPath, 'utf8');
 
-const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray)
+const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray + compose timeout)
 (function wbLinuxEnvShim() {
   if (process.platform !== "linux") return;
   try {
@@ -252,30 +252,43 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray)
       if (!originalOpts || typeof originalOpts !== "object") return originalOpts;
       var env = originalOpts.env;
       if (!env || typeof env !== "object") return originalOpts;
-      var spilled = null;
+      // Build a plain copy so that hidden Proxy keys (ACC_PRODUCT_CONFIG_V3 etc.)
+      // are actually enumerable in the child process env. Object.assign across
+      // the Proxy only sees the non-hidden keys, so we must re-add them manually.
+      var result = Object.assign({}, env);
+      var needsReplace = false;
       for (var i = 0; i < SPILL_KEYS.length; i++) {
         var key = SPILL_KEYS[i];
         var value = env[key];
-        if (typeof value === "string" && value.length >= SPILL_THRESHOLD) {
-          try {
-            var dir = spillDir();
-            var filePath = pathMod.join(
-              dir,
-              key + "-" + cryptoMod.randomBytes(8).toString("hex") + ".json"
-            );
-            fsMod.writeFileSync(filePath, value, { mode: 0o600 });
-            if (!spilled) spilled = Object.assign({}, env);
-            delete spilled[key];
-            spilled[key + "_FILE"] = filePath;
-          } catch (err) {
+        if (typeof value === "string") {
+          if (value.length >= SPILL_THRESHOLD) {
+            // Oversized: spill to a temp file and pass _FILE pointer instead.
+            // The sidecar-entry.js shim reads the file back.
             try {
-              console.error("[wb-linux-shim] failed to spill " + key + ":", err);
-            } catch (_) {}
+              var dir = spillDir();
+              var filePath = pathMod.join(
+                dir,
+                key + "-" + cryptoMod.randomBytes(8).toString("hex") + ".json"
+              );
+              fsMod.writeFileSync(filePath, value, { mode: 0o600 });
+              delete result[key];
+              result[key + "_FILE"] = filePath;
+              needsReplace = true;
+            } catch (err) {
+              try {
+                console.error("[wb-linux-shim] failed to spill " + key + ":", err);
+              } catch (_) {}
+            }
+          } else if (!(key in result)) {
+            // Non-oversized but missing from the plain copy because the Proxy
+            // hides it from ownKeys. Include it directly so the child gets it.
+            result[key] = value;
+            needsReplace = true;
           }
         }
       }
-      if (!spilled) return originalOpts;
-      return Object.assign({}, originalOpts, { env: spilled });
+      if (!needsReplace) return originalOpts;
+      return Object.assign({}, originalOpts, { env: result });
     }
 
     function wrapSpawnLike(name) {
@@ -924,6 +937,9 @@ if (source.includes(marker)) {
     // Patch 7E: SessionManager.composePromptForBackend — 5s race + raw
     // prompt fallback so the very first chat message can't hang on the
     // remote userPromptComposer (collectors / waitConfiguration).
+    //
+    // Upstream 5.x changed desiredConfig from cloneDesiredConfig(...) to
+    // session.desiredConfig.
     const composeFrom =
         '\tasync composePromptForBackend(session, prompt, _meta) {\n' +
         '\t\tif (!this.userPromptComposer || !Array.isArray(prompt) || prompt.length === 0) return prompt;\n' +
@@ -931,7 +947,7 @@ if (source.includes(marker)) {
         '\t\treturn this.userPromptComposer.composeUserPrompt({\n' +
         '\t\t\tsessionId: session.sessionId,\n' +
         '\t\t\tcwd: session.cwd,\n' +
-        '\t\t\tdesiredConfig: cloneDesiredConfig(session.desiredConfig),\n' +
+        '\t\t\tdesiredConfig: session.desiredConfig,\n' +
         '\t\t\tprompt: structuredClone(prompt),\n' +
         '\t\t\t_meta: _meta ? structuredClone(_meta) : void 0,\n' +
         '\t\t\thasPriorUserMessages: sessionHasPriorUserMessages(session)\n' +
@@ -946,7 +962,7 @@ if (source.includes(marker)) {
         '\t\tconst wbComposeP = this.userPromptComposer.composeUserPrompt({\n' +
         '\t\t\tsessionId: session.sessionId,\n' +
         '\t\t\tcwd: session.cwd,\n' +
-        '\t\t\tdesiredConfig: cloneDesiredConfig(session.desiredConfig),\n' +
+        '\t\t\tdesiredConfig: session.desiredConfig,\n' +
         '\t\t\tprompt: structuredClone(prompt),\n' +
         '\t\t\t_meta: _meta ? structuredClone(_meta) : void 0,\n' +
         '\t\t\thasPriorUserMessages: sessionHasPriorUserMessages(session)\n' +
