@@ -1022,8 +1022,44 @@ if (source.includes(marker)) {
         }
     }
 
+    const clawRuntimePluginRegistrationReplayFrom =
+        '\t\tthis.runtime = new ClawRuntime(host, this.telemetryService, logger, this.channelTracingService);\n' +
+        '\t\tthis.ensureBuiltinPluginsRegistered();\n' +
+        '\t\tthis.configureReplyResolver();';
+    const clawRuntimePluginRegistrationReplayTo =
+        '\t\tthis.runtime = new ClawRuntime(host, this.telemetryService, logger, this.channelTracingService);\n' +
+        '\t\tthis.ensureBuiltinPluginsRegistered();\n' +
+        '\t\tsetTimeout(async () => {\n' +
+        '\t\t\ttry {\n' +
+        '\t\t\t\tconst wbWechatmpConfig = this.store?.getChannelConfigs?.()["wechatmp"];\n' +
+        '\t\t\t\tconst wbWechatmpEnabled = this.getWechatmpEnabled() || !!(wbWechatmpConfig && wbWechatmpConfig.enabled !== false);\n' +
+        '\t\t\t\tthis.logger.info(`[wb-linux][ClawService] plugin registration replay check: apiEnabled=${this.getWechatmpEnabled()} configEnabled=${!!(wbWechatmpConfig && wbWechatmpConfig.enabled !== false)}`);\n' +
+        '\t\t\t\tif (wbWechatmpEnabled) {\n' +
+        '\t\t\t\t\tthis.logger.info("[wb-linux][ClawService] plugin registration replay enabled wechatmp integration");\n' +
+        '\t\t\t\t\tthis.enableWechatmpChannel();\n' +
+        '\t\t\t\t\tawait this.registerChannelConfig({ channelType: "wechatmp" });\n' +
+        '\t\t\t\t\tthis.startCentrifugo().catch((error) => {\n' +
+        '\t\t\t\t\t\tthis.logger.warn(`[wb-linux][ClawService] plugin registration replay Centrifugo start failed: ${error}`);\n' +
+        '\t\t\t\t\t});\n' +
+        '\t\t\t\t}\n' +
+        '\t\t\t} catch (error) {\n' +
+        '\t\t\t\tthis.logger.warn(`[wb-linux][ClawService] plugin registration replay failed: ${error instanceof Error ? error.message : String(error)}`);\n' +
+        '\t\t\t}\n' +
+        '\t\t}, 1000).unref?.();\n' +
+        '\t\tthis.configureReplyResolver();';
+    {
+        const idx = source.indexOf(clawRuntimePluginRegistrationReplayFrom);
+        if (idx >= 0) {
+            source = source.slice(0, idx) + clawRuntimePluginRegistrationReplayTo + source.slice(idx + clawRuntimePluginRegistrationReplayFrom.length);
+            markOptional('wechatmpPluginRegistrationReplay', true);
+        } else {
+            console.error('[apply-linux-patches] ERROR: wechatmpPluginRegistrationReplay anchor not found; skipping (registered wechatmp plugin may not trigger remote replay)');
+            markOptional('wechatmpPluginRegistrationReplay', false);
+        }
+    }
+
     fs.writeFileSync(indexPath, source);
-    log('patched main/index.js (env shim + tray context menu + tray icon path + disabled updater + linux stability timeouts)');
+    log('patched main/index.js (env shim + tray context menu + tray icon path + disabled updater + linux stability timeouts + wechatmp plugin registration replay)');
 }
 
 // ---------------------------------------------------------------------------
