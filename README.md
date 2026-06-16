@@ -112,7 +112,7 @@ WorkBuddy 基于 VS Code/Electron 开发，其 macOS 应用的 `app.asar` 文件
 
 由于上游打包特性的限制以及闭源商业组件的存在，移植后的 Linux 版本存在以下预期内的功能降级（不影响核心开发体验）：
 
-1. **腾讯文档引擎待进一步测试**：官方 DMG 包内捆绑的 `@tencent/docs-engine` 仅提供了 macOS Arm64 架构的专有二进制库（`.dylib`）。Linux 无法运行此类文件且无源码可供重新编译，为防止底层引发 `dlopen invalid ELF header` 导致的主进程崩溃，转换脚本已将其强制移除。**当前状态**：目前已确认可以登录并获取腾讯文档列表/内容；涉及深度协同编辑、复杂文档渲染或依赖原生 docs-engine 的能力仍待进一步测试，不影响 AI 助手和本地代码编辑。
+1. **腾讯文档引擎**：官方 DMG 包内捆绑的 `@tencent/docs-engine` 仅提供了 macOS Arm64 架构的专有二进制库（`.dylib`）。Linux 无法运行此类文件且无源码可供重新编译，为防止底层引发 `dlopen invalid ELF header` 导致的主进程崩溃，转换脚本已将其强制移除。**当前状态**：经测试，**腾讯文档的基本创建、读取、修改功能均正常可用**（通过云 API 通道），不影响 AI 助手和本地代码编辑。深度协同编辑、复杂文档渲染等依赖原生 docs-engine 的能力无法使用。
 2. **AI 代码沙盒降级**：内置 CLI 工具 `vendor/sandbox` 是腾讯内部私有的代码沙盒引擎（Tencent Sandbox），使用的是包含 Windows 和 macOS 格式的预编译隔离库。由于缺少 Linux 版沙盒核心，脚本已清理无关平台的二进制文件。**影响**：当 AI 助手尝试全自动执行代码时，会因为沙盒模块缺失而回退到无沙盒的真实终端中执行，或者提示安全环境不可用而拒绝执行自动化脚本。
 3. **自动更新不可用**：Linux 移植版已禁用应用内的"检查更新"功能（菜单项灰化、后台自动检查已关闭）。上游更新器依赖 macOS ShipIt / Windows Squirrel 安装器，在 Linux 上无法使用。如需更新，请手动下载新版官方 DMG 并重新执行构建流程。
 ## 移植过程中已修复的问题
@@ -128,10 +128,12 @@ WorkBuddy 基于 VS Code/Electron 开发，其 macOS 应用的 `app.asar` 文件
 7. **Wayland / 现代面板下托盘图标完全不显示（5.0.3+wb3）**：Electron 默认仍走 GtkStatusIcon (X11 XEmbed)，但 Wayland session 与 waybar、quickshell DMS、KDE Plasma 6 等只实现 StatusNotifierItem (KDE SNI)，XEmbed 完全失效，应用日志虽然写 `trayActive=true, hasIcon=true`，但实际没在 SNI 上注册。**修复方式**：`install.sh` 生成的 `start.sh` 模板里把 `Unity` 注入到 `XDG_CURRENT_DESKTOP`（如 `Unity:XFCE`），让 Electron 走 `ayatana-appindicator` (SNI) 路径；保留原桌面名以兼容其它依赖该变量的程序。
 8. **多 connector 启用时首条 LLM 调用阻塞分钟级（5.0.3+wb3）**：上游 codebuddy CLI 的 stdio MCP settle 默认 30s/server 串行等待。**修复方式**：`start.sh` 默认 `MCP_TIMEOUT=3000`，配合 codebuddy.js 内部的 `cliMcpSettleTimeoutInteractive` patch；健康服务正常使用，慢服务跳过。
 9. **WorkBuddy App / 小程序远程控制重启后需要手动开关**：上游 `ClawLifecycle.start()` 启动时会恢复已保存通道并启动 Centrifugo，但微信/小程序集成的 `wechatmp` 默认启用状态可能只停留在本地配置，后台注册和远程订阅没有在桌面端重启后完整重放。**修复方式**：Linux 运行时补丁在 Claw 生命周期启动后延迟重放已启用的 `wechatmp` 集成，重新写入启用状态、调用后台注册并启动 Centrifugo，避免关闭再打开程序后必须手动关闭/打开「微信/小程序集成」开关。
+10. **子进程环境变量丢失导致模型无法响应（5.1.1）**：Env Proxy 的 `ownKeys` 不返回 `ACC_PRODUCT_CONFIG_V3`，`spillOversizedEnv()` 通过 `Object.assign({}, env)` 拷贝时遗漏了隐藏 key，非 oversized（<100KB）时直接返回原 Proxy 对象，子进程始终拿不到该环境变量。**修复方式**：始终构建普通对象拷贝 env，显式将隐藏的 `ACC_PRODUCT_CONFIG_V3/V2` 添加到子进程 env 中，超过 100KB 的仍 spill 到文件。
+11. **`composePromptForBackend` 锚点未适配 5.1.1 代码结构**：上游 5.x 将 `composeUserPrompt` 的参数从 `cloneDesiredConfig(session.desiredConfig)` 改为 `session.desiredConfig`，导致补丁的字符串锚点匹配失败，`composePromptForBackendTimeout` 补丁被跳过，首条聊天消息可能卡死在 prompt 合成阶段。**修复方式**：将匹配模式更新为 `session.desiredConfig`，同时保留 5s `Promise.race` 超时 + 原始 prompt 回退逻辑。
 
 ## 版本适配说明
 
-当前补丁基于官方 WorkBuddy **4.22.10**（构建号 `27634624-ec5e02bd`）和 **5.0.3**（构建号 `30150715-f5a1d06d`）开展适配。5.x 使用 Electron 37.10.3，仍采用 `app.asar` + `app.asar.unpacked` 载荷结构。更高版本的 DMG 可能因为上游代码结构变化导致补丁无法正确应用；构建脚本会在必需补丁未命中时中止，并在成功时生成 `.workbuddy-linux/patch-report.json` 记录补丁命中结果。如遇到构建失败或运行异常，请在本仓库提 Issue 并附上所使用的 DMG 版本号。
+当前补丁基于官方 WorkBuddy **4.22.10**（构建号 `27634624-ec5e02bd`）、**5.0.3**（构建号 `30150715-f5a1d06d`）和 **5.1.1**（构建号 `30799983-ecafd59f`）验证通过。5.x 使用 Electron 37.10.3，仍采用 `app.asar` + `app.asar.unpacked` 载荷结构。更高版本的 DMG 可能因为上游代码结构变化导致补丁无法正确应用；构建脚本会在必需补丁未命中时中止，并在成功时生成 `.workbuddy-linux/patch-report.json` 记录补丁命中结果。如遇到构建失败或运行异常，请在本仓库提 Issue 并附上所使用的 DMG 版本号。
 
 Linux 启动脚本默认启用 Chromium sandbox。只有在明确理解安全风险并需要临时排障时，才使用下面的方式降级启动：
 
