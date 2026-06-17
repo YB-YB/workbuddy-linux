@@ -87,6 +87,10 @@ function assertRequiredPatches() {
 //      (b) we can reliably recover the exact bytes for every entry.
 //    Unpacked entries are copied from the sibling <asar>.unpacked/ dir.
 // ---------------------------------------------------------------------------
+if (!fs.existsSync(asarPath)) {
+    console.error('[apply-linux-patches] ERROR: asar file not found: ' + asarPath);
+    process.exit(2);
+}
 const { header } = asar.getRawHeader(asarPath);
 const unpackedSiblingDir = asarPath + '.unpacked';
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-asar-patch-'));
@@ -242,9 +246,33 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
     var SPILL_KEYS = ["ACC_PRODUCT_CONFIG_V3", "ACC_PRODUCT_CONFIG_V2"];
     var SPILL_THRESHOLD = 100 * 1024; // 100KB; MAX_ARG_STRLEN is 128KB
 
+    // Clean up stale spill dirs from previous runs
+    try {
+      var wbTmpDir = osMod.tmpdir();
+      var wbEntries = fsMod.readdirSync(wbTmpDir);
+      var wbOurPid = String(process.pid);
+      for (var wbI = 0; wbI < wbEntries.length; wbI++) {
+        var wbEntry = wbEntries[wbI];
+        if (typeof wbEntry === "string" && wbEntry.indexOf("workbuddy-linux-env-") === 0) {
+          var wbPidStr = wbEntry.slice("workbuddy-linux-env-".length);
+          if (wbPidStr !== wbOurPid && /^\d+$/.test(wbPidStr)) {
+            try { fsMod.rmSync(pathMod.join(wbTmpDir, wbEntry), { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Clean up our own spill dir on process exit
+    process.on("exit", function wbCleanOwnSpill() {
+      try { fsMod.rmSync(pathMod.join(osMod.tmpdir(), "workbuddy-linux-env-" + process.pid), { recursive: true, force: true }); } catch (_) {}
+    });
+
+    var spillDirCache = null;
     function spillDir() {
+      if (spillDirCache) return spillDirCache;
       var dir = pathMod.join(osMod.tmpdir(), "workbuddy-linux-env-" + process.pid);
       try { fsMod.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch (_) {}
+      spillDirCache = dir;
       return dir;
     }
 
@@ -423,6 +451,8 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
             (modName === "@lydell/node-pty" || modName === "${lydellPlatformPackage}" || modName === "node-pty") &&
             result && typeof result.spawn === "function" && !result.spawn.__wbPtyWrapped) {
           ptyPatched = true;
+          // Restore original require immediately to avoid perpetual hook overhead
+          Module.prototype.require = origRequire;
           var origSpawn = result.spawn;
           result.spawn = function wbPtySpawn(file, args, opts) {
             if (opts && opts.env && typeof opts.env === "object") {
@@ -1078,6 +1108,8 @@ if (source.includes(marker)) {
     log('patched main/index.js (env shim + tray context menu + tray icon path + disabled updater + linux stability timeouts + wechatmp plugin registration replay)');
 }
 
+assertRequiredPatches();
+
 // ---------------------------------------------------------------------------
 // Also patch sidecar-entry.js so the sidecar process, spawned with
 // ELECTRON_RUN_AS_NODE=1 and its own Node bootstrap, receives the same
@@ -1175,6 +1207,10 @@ patchCliDistCodebuddy();
 // the tmpDir so the repack step includes it as an unpacked entry.
 // ---------------------------------------------------------------------------
 const lydellPackageBasename = lydellPlatformPackage.split('/')[1];
+if (!lydellPackageBasename) {
+    console.error('[apply-linux-patches] ERROR: could not extract package basename from ' + lydellPlatformPackage);
+    process.exit(2);
+}
 const lydellLinuxSrc = path.join(unpackedSiblingDir, 'node_modules', '@lydell', lydellPackageBasename);
 const lydellLinuxDst = path.join(tmpDir, 'node_modules', '@lydell', lydellPackageBasename);
 if (fs.existsSync(lydellLinuxSrc) && !fs.existsSync(lydellLinuxDst)) {
