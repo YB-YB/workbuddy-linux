@@ -1471,7 +1471,7 @@ function patchCliDistCodebuddy() {
     }
 
     let cliSource = fs.readFileSync(codebuddyPath, 'utf8');
-    const replacements = [
+    const exactReplacements = [
         {
             from: 'for(let eg of ec){let ec=(0,AF.join)(eA,eg);if(!await this.pathExists(ec)){this.logger.warn(`Agent path not found: ${ec}`);continue}',
             to: 'for(let eg of ec){let e$="string"==typeof eg?eg:eg&&"string"==typeof eg.path?eg.path:eg&&"string"==typeof eg.source?eg.source:void 0;if(!e$){this.logger.warn(`Invalid agent path entry: ${JSON.stringify(eg)}`);continue}let ec=(0,AF.join)(eA,e$);if(!await this.pathExists(ec)){this.logger.warn(`Agent path not found: ${ec}`);continue}'
@@ -1500,18 +1500,62 @@ function patchCliDistCodebuddy() {
     ];
 
     let patched = 0;
-    for (const { from, to } of replacements) {
+    let pathCompatPatched = 0;
+    for (const { from, to } of exactReplacements) {
         if (cliSource.includes(to)) {
             patched++;
+            if (to.includes('Invalid agent path entry') || to.includes('Invalid command path entry') || to.includes('Invalid skill path entry')) pathCompatPatched++;
             continue;
         }
         if (cliSource.includes(from)) {
             cliSource = cliSource.replace(from, to);
             patched++;
+            if (to.includes('Invalid agent path entry') || to.includes('Invalid command path entry') || to.includes('Invalid skill path entry')) pathCompatPatched++;
         }
     }
 
-    if (patched === replacements.length) {
+    const pathObjectHelpers = 'let e$="string"==typeof eA?eA:eA&&"string"==typeof eA.path?eA.path:eA&&"string"==typeof eA.source?eA.source:void 0;if(!e$){ep.push(`Invalid agent path entry: ${JSON.stringify(eA)}`);continue}let el=(0,tZ.join)(eu,e$);(0,tW.existsSync)(el)||ep.push(`Agent path not found: ${e$}`)';
+    const pathObjectReplacements = [
+        {
+            from: 'if(el.agents)for(let eA of"string"==typeof el.agents?[el.agents]:el.agents){let el=(0,tZ.join)(eu,eA);(0,tW.existsSync)(el)||ep.push(`Agent path not found: ${eA}`)}',
+            to: 'if(el.agents)for(let eA of"string"==typeof el.agents?[el.agents]:el.agents){let e$="string"==typeof eA?eA:eA&&"string"==typeof eA.path?eA.path:eA&&"string"==typeof eA.source?eA.source:void 0;if(!e$){ep.push(`Invalid agent path entry: ${JSON.stringify(eA)}`);continue}let el=(0,tZ.join)(eu,e$);(0,tW.existsSync)(el)||ep.push(`Agent path not found: ${e$}`)}'
+        },
+        {
+            from: 'if(el.commands)for(let eA of"string"==typeof el.commands?[el.commands]:el.commands){let el=(0,tZ.join)(eu,eA);(0,tW.existsSync)(el)||ep.push(`Command path not found: ${eA}`)}',
+            to: 'if(el.commands)for(let eA of"string"==typeof el.commands?[el.commands]:el.commands){let e$="string"==typeof eA?eA:eA&&"string"==typeof eA.path?eA.path:eA&&"string"==typeof eA.source?eA.source:void 0;if(!e$){ep.push(`Invalid command path entry: ${JSON.stringify(eA)}`);continue}let el=(0,tZ.join)(eu,e$);(0,tW.existsSync)(el)||ep.push(`Command path not found: ${e$}`)}'
+        },
+        {
+            from: 'if(el.skills)for(let eA of el.skills){let el=(0,tZ.join)(eu,eA);(0,tW.existsSync)(el)||ep.push(`Skill path not found: ${eA}`)}',
+            to: 'if(el.skills)for(let eA of"string"==typeof el.skills?[el.skills]:el.skills){let e$="string"==typeof eA?eA:eA&&"string"==typeof eA.path?eA.path:eA&&"string"==typeof eA.source?eA.source:void 0;if(!e$){ep.push(`Invalid skill path entry: ${JSON.stringify(eA)}`);continue}let el=(0,tZ.join)(eu,e$);(0,tW.existsSync)(el)||ep.push(`Skill path not found: ${e$}`)}'
+        }
+    ];
+    if (cliSource.includes(pathObjectHelpers)) {
+        pathCompatPatched = Math.max(pathCompatPatched, 3);
+    } else {
+        for (const { from, to } of pathObjectReplacements) {
+            if (cliSource.includes(to)) {
+                pathCompatPatched++;
+            } else if (cliSource.includes(from)) {
+                cliSource = cliSource.replace(from, to);
+                pathCompatPatched++;
+            }
+        }
+    }
+
+    const sessionReplayPatched = cliSource.includes('findSessionAcrossProjects') || cliSource.includes('getHomeProjectsDir();for(let ed of await');
+    if (sessionReplayPatched && !exactReplacements[3].to.includes('findSessionAcrossProjects')) patched = Math.max(patched, pathCompatPatched + 1);
+
+    const mcpNewFrom = 'eA&&!this.allServersSettled()&&await this.serverCollectionSubject.pipe((0,AG.filter)(()=>this.allServersSettled()),(0,AH.take)(1),(0,Aj.timeout)(AZ.McpUtils.getMcpTimeout()??3e4),(0,AK.catchError)(()=>(this.logger.warn("MCP servers did not settle within timeout, proceeding with available servers"),(0,AU.of)(void 0)))).toPromise()';
+    const mcpNewTo = '!this.allServersSettled()&&await this.serverCollectionSubject.pipe((0,AG.filter)(()=>this.allServersSettled()),(0,AH.take)(1),(0,Aj.timeout)(AZ.McpUtils.getMcpTimeout()??3e4),(0,AK.catchError)(()=>(this.logger.warn("[wb-linux] MCP servers did not settle within timeout, proceeding with available servers"),(0,AU.of)(void 0)))).toPromise()';
+    let mcpPatched = cliSource.includes(mcpNewTo) || cliSource.includes('[wb-linux] MCP servers did not settle within timeout');
+    if (!mcpPatched && cliSource.includes(mcpNewFrom)) {
+        cliSource = cliSource.replace(mcpNewFrom, mcpNewTo);
+        mcpPatched = true;
+    }
+
+    patched = Math.max(patched, pathCompatPatched + (sessionReplayPatched ? 1 : 0) + (mcpPatched ? 1 : 0));
+
+    if (pathCompatPatched === 3 && sessionReplayPatched && mcpPatched) {
         fs.writeFileSync(codebuddyPath, cliSource);
         log('patched cli/dist/codebuddy.js (extension path object compatibility, session replay fallback, MCP settle timeout in interactive mode)');
         markOptional('cliExtensionPathObjectCompat', true);
@@ -1521,7 +1565,7 @@ function patchCliDistCodebuddy() {
         markOptional('cliExtensionPathObjectCompat', false);
         markOptional('cliSessionReplayAcrossProjectsFallback', false);
         markOptional('cliMcpSettleTimeoutInteractive', false);
-        console.warn('[apply-linux-patches] failed to patch all cli compatibility points: ' + patched + '/' + replacements.length);
+        console.warn('[apply-linux-patches] failed to patch all cli compatibility points: ' + patched + '/5');
     }
 }
 
