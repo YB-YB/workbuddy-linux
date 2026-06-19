@@ -103,11 +103,23 @@ process.on('exit', () => {
 // the temp dir. Also accumulate the "unpacked" set for later.
 // ---------------------------------------------------------------------------
 const unpackedFiles = [];
+function safeExtractPath(rel) {
+    if (!rel || path.isAbsolute(rel) || rel.split('/').includes('..')) {
+        throw new Error('unsafe asar entry path: ' + rel);
+    }
+    const abs = path.resolve(tmpDir, rel);
+    const root = path.resolve(tmpDir) + path.sep;
+    if (abs !== path.resolve(tmpDir) && !abs.startsWith(root)) {
+        throw new Error('asar entry escapes temp dir: ' + rel);
+    }
+    return abs;
+}
+
 function walk(node, prefix) {
     if (!node.files) return;
     for (const [name, entry] of Object.entries(node.files)) {
         const rel = prefix ? prefix + '/' + name : name;
-        const abs = path.join(tmpDir, rel);
+        const abs = safeExtractPath(rel);
         if (entry.files) {
             fs.mkdirSync(abs, { recursive: true });
             walk(entry, rel);
@@ -246,17 +258,33 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
     var SPILL_KEYS = ["ACC_PRODUCT_CONFIG_V3", "ACC_PRODUCT_CONFIG_V2"];
     var SPILL_THRESHOLD = 100 * 1024; // 100KB; MAX_ARG_STRLEN is 128KB
 
+    function wbSpillPath(prefix, suffix) {
+      return pathMod.join(
+        spillDir(),
+        prefix + "-" + cryptoMod.randomBytes(8).toString("hex") + suffix
+      );
+    }
+
     // Clean up stale spill dirs from previous runs
     try {
       var wbTmpDir = osMod.tmpdir();
       var wbEntries = fsMod.readdirSync(wbTmpDir);
       var wbOurPid = String(process.pid);
+      var wbNow = Date.now();
       for (var wbI = 0; wbI < wbEntries.length; wbI++) {
         var wbEntry = wbEntries[wbI];
         if (typeof wbEntry === "string" && wbEntry.indexOf("workbuddy-linux-env-") === 0) {
           var wbPidStr = wbEntry.slice("workbuddy-linux-env-".length);
           if (wbPidStr !== wbOurPid && /^\d+$/.test(wbPidStr)) {
-            try { fsMod.rmSync(pathMod.join(wbTmpDir, wbEntry), { recursive: true, force: true }); } catch (_) {}
+            try {
+              var wbPath = pathMod.join(wbTmpDir, wbEntry);
+              var wbStat = fsMod.statSync(wbPath);
+              var wbAlive = true;
+              try { process.kill(Number(wbPidStr), 0); } catch (_) { wbAlive = false; }
+              if (!wbAlive && wbNow - wbStat.mtimeMs > 24 * 60 * 60 * 1000) {
+                fsMod.rmSync(wbPath, { recursive: true, force: true });
+              }
+            } catch (_) {}
           }
         }
       }
@@ -294,10 +322,7 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
             // The sidecar-entry.js shim reads the file back.
             try {
               var dir = spillDir();
-              var filePath = pathMod.join(
-                dir,
-                key + "-" + cryptoMod.randomBytes(8).toString("hex") + ".json"
-              );
+              var filePath = wbSpillPath(key, ".json");
               fsMod.writeFileSync(filePath, value, { mode: 0o600 });
               delete result[key];
               result[key + "_FILE"] = filePath;
@@ -365,8 +390,8 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
     // If our parent handed us a _FILE pointer (i.e. we are a child
     // process spawned after Part B kicked in), read the file back
     // and re-expose the original value on process.env through the
-    // same Proxy. The file is deleted after a single read so we
-    // don't leave the JSON lying around any longer than necessary.
+    // same Proxy. The file stays in place because sibling child
+    // processes can inherit the same pointer and still need to read it.
     //
     // Additionally, we write a fresh _FILE pointer into the real env
     // so that any child processes we spawn (which inherit process.env
@@ -400,9 +425,7 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
       if (store[skey] && typeof store[skey] === "string" && store[skey].length >= SPILL_THRESHOLD) {
         if (!real[sfkey]) {
           try {
-            var sdir = pathMod.join(osMod.tmpdir(), "workbuddy-linux-env-" + process.pid);
-            fsMod.mkdirSync(sdir, { recursive: true, mode: 0o700 });
-            var sfp = pathMod.join(sdir, skey + ".json");
+            var sfp = wbSpillPath(skey, ".json");
             fsMod.writeFileSync(sfp, store[skey], { mode: 0o600 });
             real[sfkey] = sfp;
           } catch (_) {}
@@ -463,9 +486,7 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
                 var pv = patchedEnv[pk];
                 if (typeof pv === "string" && pv.length >= SPILL_THRESHOLD) {
                   try {
-                    var pdir = pathMod.join(osMod.tmpdir(), "workbuddy-linux-env-" + process.pid);
-                    fsMod.mkdirSync(pdir, { recursive: true, mode: 0o700 });
-                    var pfp = pathMod.join(pdir, pk + "-pty.json");
+                    var pfp = wbSpillPath(pk + "-pty", ".json");
                     fsMod.writeFileSync(pfp, pv, { mode: 0o600 });
                     if (!didPatch) { patchedEnv = Object.assign({}, patchedEnv); didPatch = true; }
                     delete patchedEnv[pk];
@@ -562,8 +583,6 @@ if (source.includes(marker)) {
     // wired to the existing window:minimize/maximize/close RPC channels
     // exposed via the preload script.
     // -----------------------------------------------------------------------
-    const linuxFrameMarker = '...!isMac && !isWindows && { frame: false }';
-    const linuxFrameIdx = source.indexOf(linuxFrameMarker);
     // Keep frame: false (we draw our own buttons), but remove the
     // titleBarOverlay we added earlier since it doesn't work on X11.
     // (No change needed — the marker is already just { frame: false })
@@ -644,7 +663,8 @@ if (source.includes(marker)) {
     }
 
     // -----------------------------------------------------------------------
-    // Fix 6 (Linux): disable the "Check for Updates..." menu item and    // stub out the updateCheck / updateDownload / updateQuitAndInstall
+    // Fix 6 (Linux): disable the "Check for Updates..." menu item and
+    // stub out the updateCheck / updateDownload / updateQuitAndInstall
     // RPCs. The upstream updater talks to the macOS ShipIt / Windows
     // Squirrel / NSIS installers which are not available on Linux, and
     // the downloaded payloads (.dmg / .exe) cannot be applied here. We
@@ -1104,8 +1124,251 @@ if (source.includes(marker)) {
         }
     }
 
+    const networkDiagnosticsRunFrom =
+        '\t\tconst [proxy, hosts, service, tcp, packetLoss] = await Promise.all([\n' +
+        '\t\t\tthis.runProxyDiagnostics(proxyInfo),\n' +
+        '\t\t\tthis.runHostsDiagnostics(host, hostsFilePath),\n' +
+        '\t\t\tthis.runServiceDiagnostics(runtimeConfig.endpoint),\n' +
+        '\t\t\tthis.runTcpDiagnostics(host, port, proxyInfo),\n' +
+        '\t\t\tthis.runPacketLossDiagnostics(host)\n' +
+        '\t\t]);';
+    const networkDiagnosticsRunTo =
+        '\t\tconst [proxy, hosts, service, tcp, packetLoss] = await Promise.all([\n' +
+        '\t\t\tthis.runCheckWithTimeout("proxy", () => this.runProxyDiagnostics(proxyInfo), 5000),\n' +
+        '\t\t\tthis.runCheckWithTimeout("hosts", () => this.runHostsDiagnostics(host, hostsFilePath), 5000),\n' +
+        '\t\t\tthis.runCheckWithTimeout("service", () => this.runServiceDiagnostics(runtimeConfig.endpoint), 7000),\n' +
+        '\t\t\tthis.runCheckWithTimeout("tcp", () => this.runTcpDiagnostics(host, port, proxyInfo), 5000),\n' +
+        '\t\t\tthis.runCheckWithTimeout("packetLoss", () => this.runPacketLossDiagnostics(host), 35000)\n' +
+        '\t\t]);';
+    const networkDiagnosticsMethodFrom =
+        '\tasync measureTcpConnection(host, port, timeoutMs) {';
+    const networkDiagnosticsMethodTo =
+        '\tasync runCheckWithTimeout(name, task, timeoutMs) {\n' +
+        '\t\tlet timer;\n' +
+        '\t\ttry {\n' +
+        '\t\t\treturn await Promise.race([\n' +
+        '\t\t\t\ttask(),\n' +
+        '\t\t\t\tnew Promise((resolve) => {\n' +
+        '\t\t\t\t\ttimer = setTimeout(() => resolve({\n' +
+        '\t\t\t\t\t\tstatus: "warning",\n' +
+        '\t\t\t\t\t\tsummary: `${name}-timeout`,\n' +
+        '\t\t\t\t\t\tdetail: `Check timed out after ${timeoutMs}ms.`,\n' +
+        '\t\t\t\t\t\terrorType: "timeout"\n' +
+        '\t\t\t\t\t}), timeoutMs);\n' +
+        '\t\t\t\t})\n' +
+        '\t\t\t]);\n' +
+        '\t\t} finally {\n' +
+        '\t\t\tclearTimeout(timer);\n' +
+        '\t\t}\n' +
+        '\t}\n' +
+        '\tasync measureTcpConnection(host, port, timeoutMs) {';
+    {
+        const runIdx = source.indexOf(networkDiagnosticsRunFrom);
+        const methodIdx = source.indexOf(networkDiagnosticsMethodFrom, runIdx >= 0 ? runIdx : 0);
+        if (runIdx >= 0 && methodIdx >= 0 && !source.includes('async runCheckWithTimeout(name, task, timeoutMs)')) {
+            source = source.slice(0, runIdx) + networkDiagnosticsRunTo + source.slice(runIdx + networkDiagnosticsRunFrom.length);
+            const updatedMethodIdx = source.indexOf(networkDiagnosticsMethodFrom, runIdx);
+            source = source.slice(0, updatedMethodIdx) + networkDiagnosticsMethodTo + source.slice(updatedMethodIdx + networkDiagnosticsMethodFrom.length);
+            markRequired('networkDiagnosticsTimeouts', true);
+        } else if (source.includes('async runCheckWithTimeout(name, task, timeoutMs)')) {
+            markRequired('networkDiagnosticsTimeouts', true);
+        } else {
+            console.error('[apply-linux-patches] ERROR: networkDiagnosticsTimeouts anchor not found; network diagnostics may stay stuck on a hung DNS/ping/probe task');
+            markRequired('networkDiagnosticsTimeouts', false);
+        }
+    }
+
     fs.writeFileSync(indexPath, source);
     log('patched main/index.js (env shim + tray context menu + tray icon path + disabled updater + linux stability timeouts + wechatmp plugin registration replay)');
+}
+
+if (!patchReport.required.networkDiagnosticsTimeouts) {
+    const runFrom =
+        '\t\tconst [proxy, hosts, service, tcp, packetLoss] = await Promise.all([\n' +
+        '\t\t\tthis.runProxyDiagnostics(proxyInfo),\n' +
+        '\t\t\tthis.runHostsDiagnostics(host, hostsFilePath),\n' +
+        '\t\t\tthis.runServiceDiagnostics(runtimeConfig.endpoint),\n' +
+        '\t\t\tthis.runTcpDiagnostics(host, port, proxyInfo),\n' +
+        '\t\t\tthis.runPacketLossDiagnostics(host)\n' +
+        '\t\t]);';
+    const runTo =
+        '\t\tconst [proxy, hosts, service, tcp, packetLoss] = await Promise.all([\n' +
+        '\t\t\tthis.runCheckWithTimeout("proxy", () => this.runProxyDiagnostics(proxyInfo), 5000),\n' +
+        '\t\t\tthis.runCheckWithTimeout("hosts", () => this.runHostsDiagnostics(host, hostsFilePath), 5000),\n' +
+        '\t\t\tthis.runCheckWithTimeout("service", () => this.runServiceDiagnostics(runtimeConfig.endpoint), 7000),\n' +
+        '\t\t\tthis.runCheckWithTimeout("tcp", () => this.runTcpDiagnostics(host, port, proxyInfo), 5000),\n' +
+        '\t\t\tthis.runCheckWithTimeout("packetLoss", () => this.runPacketLossDiagnostics(host), 35000)\n' +
+        '\t\t]);';
+    const methodFrom = '\tasync measureTcpConnection(host, port, timeoutMs) {';
+    const methodTo =
+        '\tasync runCheckWithTimeout(name, task, timeoutMs) {\n' +
+        '\t\tlet timer;\n' +
+        '\t\ttry {\n' +
+        '\t\t\treturn await Promise.race([\n' +
+        '\t\t\t\ttask(),\n' +
+        '\t\t\t\tnew Promise((resolve) => {\n' +
+        '\t\t\t\t\ttimer = setTimeout(() => resolve({\n' +
+        '\t\t\t\t\t\tstatus: "warning",\n' +
+        '\t\t\t\t\t\tsummary: `${name}-timeout`,\n' +
+        '\t\t\t\t\t\tdetail: `Check timed out after ${timeoutMs}ms.`,\n' +
+        '\t\t\t\t\t\terrorType: "timeout"\n' +
+        '\t\t\t\t\t}), timeoutMs);\n' +
+        '\t\t\t\t})\n' +
+        '\t\t\t]);\n' +
+        '\t\t} finally {\n' +
+        '\t\t\tclearTimeout(timer);\n' +
+        '\t\t}\n' +
+        '\t}\n' +
+        '\tasync measureTcpConnection(host, port, timeoutMs) {';
+    const runIdx = source.indexOf(runFrom);
+    const methodIdx = source.indexOf(methodFrom, runIdx >= 0 ? runIdx : 0);
+    if (runIdx >= 0 && methodIdx >= 0 && !source.includes('async runCheckWithTimeout(name, task, timeoutMs)')) {
+        source = source.slice(0, runIdx) + runTo + source.slice(runIdx + runFrom.length);
+        const updatedMethodIdx = source.indexOf(methodFrom, runIdx);
+        source = source.slice(0, updatedMethodIdx) + methodTo + source.slice(updatedMethodIdx + methodFrom.length);
+        fs.writeFileSync(indexPath, source);
+        log('patched main/index.js (network diagnostics per-check timeouts)');
+        markRequired('networkDiagnosticsTimeouts', true);
+    } else if (source.includes('async runCheckWithTimeout(name, task, timeoutMs)')) {
+        markRequired('networkDiagnosticsTimeouts', true);
+    } else {
+        console.error('[apply-linux-patches] ERROR: networkDiagnosticsTimeouts anchor not found; network diagnostics may stay stuck on a hung DNS/ping/probe task');
+        markRequired('networkDiagnosticsTimeouts', false);
+    }
+}
+
+{
+    const oldPacketLossTimeout = 'this.runCheckWithTimeout("packetLoss", () => this.runPacketLossDiagnostics(host), 12000)';
+    const newPacketLossTimeout = 'this.runCheckWithTimeout("packetLoss", () => this.runPacketLossDiagnostics(host), 35000)';
+    if (source.includes(oldPacketLossTimeout)) {
+        source = source.split(oldPacketLossTimeout).join(newPacketLossTimeout);
+        fs.writeFileSync(indexPath, source);
+        log('patched main/index.js (network diagnostics packet loss timeout threshold)');
+    }
+}
+
+{
+    const oldPacketLossMeasure = 'const result = await this.measurePacketLoss(host, 18, 3e4);';
+    const newPacketLossMeasure = 'const result = await this.measurePacketLoss(host, 4, 8e3);';
+    if (source.includes(oldPacketLossMeasure)) {
+        source = source.split(oldPacketLossMeasure).join(newPacketLossMeasure);
+        fs.writeFileSync(indexPath, source);
+        log('patched main/index.js (network diagnostics packet loss sample size)');
+    }
+}
+
+{
+    const oldLinuxPingArgs =
+        '\t\t\t"-c",\n' +
+        '\t\t\tString(count),\n' +
+        '\t\t\t"-n",\n' +
+        '\t\t\thost\n';
+    const newLinuxPingArgs =
+        '\t\t\t"-c",\n' +
+        '\t\t\tString(count),\n' +
+        '\t\t\t"-W",\n' +
+        '\t\t\t"2",\n' +
+        '\t\t\t"-n",\n' +
+        '\t\t\thost\n';
+    if (source.includes(oldLinuxPingArgs) && !source.includes('"-W",\n\t\t\t"2",\n\t\t\t"-n",')) {
+        source = source.replace(oldLinuxPingArgs, newLinuxPingArgs);
+        fs.writeFileSync(indexPath, source);
+        log('patched main/index.js (network diagnostics linux ping wait)');
+    }
+}
+
+{
+    const runPingFrom =
+        '\tasync runPing(args, timeoutMs, isWindows) {\n' +
+        '\t\treturn new Promise((resolve) => {\n' +
+        '\t\t\tif (isWindows) (0, child_process.execFile)("ping", args, {\n' +
+        '\t\t\t\ttimeout: timeoutMs,\n' +
+        '\t\t\t\twindowsHide: true,\n' +
+        '\t\t\t\tencoding: "buffer"\n' +
+        '\t\t\t}, (err, stdout, stderr) => {\n' +
+        '\t\t\t\tthis.decodeWindowsOutput(stdout, stderr).then((output) => {\n' +
+        '\t\t\t\t\tresolve({\n' +
+        '\t\t\t\t\t\toutput,\n' +
+        '\t\t\t\t\t\terror: err\n' +
+        '\t\t\t\t\t});\n' +
+        '\t\t\t\t});\n' +
+        '\t\t\t});\n' +
+        '\t\t\telse (0, child_process.execFile)("ping", args, {\n' +
+        '\t\t\t\ttimeout: timeoutMs,\n' +
+        '\t\t\t\twindowsHide: true\n' +
+        '\t\t\t}, (err, stdout, stderr) => {\n' +
+        '\t\t\t\tresolve({\n' +
+        '\t\t\t\t\toutput: `${stdout || ""}${stderr ? `\\n${stderr}` : ""}`.trim(),\n' +
+        '\t\t\t\t\terror: err\n' +
+        '\t\t\t\t});\n' +
+        '\t\t\t});\n' +
+        '\t\t});\n' +
+        '\t}\n';
+    const runPingTo =
+        '\tasync runPing(args, timeoutMs, isWindows) {\n' +
+        '\t\treturn new Promise((resolve) => {\n' +
+        '\t\t\tlet settled = false;\n' +
+        '\t\t\tlet child;\n' +
+        '\t\t\tconst finish = (result) => {\n' +
+        '\t\t\t\tif (settled) return;\n' +
+        '\t\t\t\tsettled = true;\n' +
+        '\t\t\t\tclearTimeout(timer);\n' +
+        '\t\t\t\tresolve(result);\n' +
+        '\t\t\t};\n' +
+        '\t\t\tconst timer = setTimeout(() => {\n' +
+        '\t\t\t\ttry {\n' +
+        '\t\t\t\t\tchild?.kill();\n' +
+        '\t\t\t\t} catch {}\n' +
+        '\t\t\t\tfinish({\n' +
+        '\t\t\t\t\toutput: "",\n' +
+        '\t\t\t\t\terror: new Error(`Ping command timed out after ${timeoutMs}ms.`)\n' +
+        '\t\t\t\t});\n' +
+        '\t\t\t}, timeoutMs + 1000);\n' +
+        '\t\t\tif (isWindows) child = (0, child_process.execFile)("ping", args, {\n' +
+        '\t\t\t\ttimeout: timeoutMs,\n' +
+        '\t\t\t\twindowsHide: true,\n' +
+        '\t\t\t\tencoding: "buffer"\n' +
+        '\t\t\t}, (err, stdout, stderr) => {\n' +
+        '\t\t\t\tthis.decodeWindowsOutput(stdout, stderr).then((output) => {\n' +
+        '\t\t\t\t\tfinish({\n' +
+        '\t\t\t\t\t\toutput,\n' +
+        '\t\t\t\t\t\terror: err\n' +
+        '\t\t\t\t\t});\n' +
+        '\t\t\t\t});\n' +
+        '\t\t\t});\n' +
+        '\t\t\telse child = (0, child_process.execFile)("ping", args, {\n' +
+        '\t\t\t\ttimeout: timeoutMs,\n' +
+        '\t\t\t\twindowsHide: true\n' +
+        '\t\t\t}, (err, stdout, stderr) => {\n' +
+        '\t\t\t\tfinish({\n' +
+        '\t\t\t\t\toutput: `${stdout || ""}${stderr ? `\\n${stderr}` : ""}`.trim(),\n' +
+        '\t\t\t\t\terror: err\n' +
+        '\t\t\t\t});\n' +
+        '\t\t\t});\n' +
+        '\t\t});\n' +
+        '\t}\n';
+    if (source.includes(runPingFrom)) {
+        source = source.replace(runPingFrom, runPingTo);
+        fs.writeFileSync(indexPath, source);
+        log('patched main/index.js (network diagnostics ping hard timeout)');
+    }
+}
+
+{
+    const linuxChineseAnchor =
+        '\t\tconst unixDetailedMatch = /(\\d+)\\s+packets transmitted,\\s*(\\d+)\\s+(?:packets )?received.*?(\\d+(?:\\.\\d+)?)%\\s+packet loss/i.exec(output);\n';
+    const linuxChinesePatch =
+        '\t\tconst unixChineseMatch = /已发送\\s*(\\d+)\\s*个包[，,]\\s*已接收\\s*(\\d+)\\s*个包.*?(\\d+(?:\\.\\d+)?)%\\s*packet loss/i.exec(output);\n' +
+        '\t\tif (unixChineseMatch) return {\n' +
+        '\t\t\ttransmitted: Number(unixChineseMatch[1]),\n' +
+        '\t\t\treceived: Number(unixChineseMatch[2]),\n' +
+        '\t\t\tlossPercentage: Number(unixChineseMatch[3])\n' +
+        '\t\t};\n';
+    if (source.includes(linuxChineseAnchor) && !source.includes('const unixChineseMatch =')) {
+        source = source.replace(linuxChineseAnchor, linuxChinesePatch + linuxChineseAnchor);
+        fs.writeFileSync(indexPath, source);
+        log('patched main/index.js (network diagnostics linux chinese ping parser)');
+    }
 }
 
 assertRequiredPatches();

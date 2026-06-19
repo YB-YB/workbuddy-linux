@@ -37,7 +37,7 @@ grep -q 'appimage)' scripts/package.sh || fail "package.sh must handle appimage 
 # install.sh must sync the upstream DMG version to the project-level
 # package.json and export PACKAGE_VERSION for downstream packaging.
 grep -q 'write_package_version' install.sh || fail "install.sh must have write_package_version function"
-grep -q "p.version = '" install.sh || fail "install.sh must patch version into package.json via node"
+grep -q 'p.version = version' install.sh || fail "install.sh must patch version into package.json via node argv"
 grep -q 'export PACKAGE_VERSION' install.sh || fail "install.sh must export PACKAGE_VERSION"
 grep -q 'resolve_package_version' scripts/lib/common.sh || fail "common.sh must provide resolve_package_version helper"
 

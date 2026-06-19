@@ -70,6 +70,25 @@ check_deps() {
     find_7z >/dev/null
 }
 
+validate_app_identity() {
+    [[ "$APP_ID" =~ ^[A-Za-z0-9._-]+$ ]] || error "WORKBUDDY_APP_ID contains unsafe characters: $APP_ID"
+    [[ "$APP_DISPLAY_NAME" != *$'\n'* && "$APP_DISPLAY_NAME" != *$'\r'* ]] || error "WORKBUDDY_APP_DISPLAY_NAME must not contain newlines"
+}
+
+desktop_value() {
+    local value="$1"
+    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || error "Desktop entry value must not contain newlines"
+    printf '%s' "$value" | python3 -c 'import sys; print(sys.stdin.read().replace("\\\\", "\\\\\\\\"))'
+}
+
+desktop_exec_path() {
+    local value="$1"
+    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || error "Desktop Exec path must not contain newlines"
+    printf '%s' "$value" | python3 -c 'import sys
+s = sys.stdin.read().replace("\\\\", "\\\\\\\\").replace("\"", "\\\\\"").replace("`", "\\\\`").replace("$", "\\\\$")
+print("\"" + s + "\"")'
+}
+
 prepare_install_dir() {
     if [ -e "$INSTALL_DIR" ]; then
         if [ "$FRESH" -eq 1 ]; then
@@ -248,13 +267,20 @@ write_desktop_entry() {
         icon_value="$INSTALL_DIR/.workbuddy-linux/workbuddy.png"
     fi
 
+    local desktop_name desktop_local_name desktop_exec desktop_local_exec desktop_icon
+    desktop_name="$(desktop_value "$APP_DISPLAY_NAME")"
+    desktop_local_name="$(desktop_value "$APP_DISPLAY_NAME Local")"
+    desktop_exec="$(desktop_exec_path "$INSTALL_DIR/start.sh") %F"
+    desktop_local_exec="$(desktop_exec_path "$INSTALL_DIR/start-local.sh")"
+    desktop_icon="$(desktop_value "$icon_value")"
+
     mkdir -p "$INSTALL_DIR/.workbuddy-linux"
     cat > "$INSTALL_DIR/.workbuddy-linux/$APP_ID.desktop" <<EOF
 [Desktop Entry]
-Name=$APP_DISPLAY_NAME
+Name=$desktop_name
 Comment=Run WorkBuddy on Linux
-Exec=$INSTALL_DIR/start.sh %F
-Icon=$icon_value
+Exec=$desktop_exec
+Icon=$desktop_icon
 Type=Application
 Categories=Development;IDE;
 StartupNotify=true
@@ -264,10 +290,10 @@ EOF
 
     cat > "$INSTALL_DIR/.workbuddy-linux/$APP_ID-local.desktop" <<EOF
 [Desktop Entry]
-Name=$APP_DISPLAY_NAME Local
+Name=$desktop_local_name
 Comment=Run WorkBuddy local CLI Web UI on Linux
-Exec=$INSTALL_DIR/start-local.sh
-Icon=$icon_value
+Exec=$desktop_local_exec
+Icon=$desktop_icon
 Type=Application
 Categories=Development;IDE;
 StartupNotify=true
@@ -278,7 +304,6 @@ EOF
 write_build_metadata() {
     local version="$1"
     local full_version="$2"
-    local app_bundle="$3"
     mkdir -p "$INSTALL_DIR/.workbuddy-linux"
     cat > "$INSTALL_DIR/.workbuddy-linux/build-info.json" <<EOF
 {
@@ -302,13 +327,16 @@ write_package_version() {
     local pkg_json="$SCRIPT_DIR/package.json"
     local app_version_file="$INSTALL_DIR/.workbuddy-linux/version"
     if [ -f "$pkg_json" ]; then
-        node -e "
-            var p = require('${pkg_json}');
-            p.version = '${version}';
-            require('fs').writeFileSync('${pkg_json}', JSON.stringify(p, null, 2) + '\n');
-        " 2>/dev/null && \
+        if node - "$pkg_json" "$version" <<'NODE' 2>/dev/null; then
+const fs = require('fs');
+const [pkgPath, version] = process.argv.slice(2);
+const p = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+p.version = version;
+fs.writeFileSync(pkgPath, JSON.stringify(p, null, 2) + '\n');
+NODE
             info "Updated package.json version to $version" || \
             warn "Failed to update package.json version to $version"
+        fi
     fi
     echo -n "$version" > "$app_version_file"
 }
@@ -316,6 +344,7 @@ write_package_version() {
 main() {
     parse_args "$@"
     check_deps
+    validate_app_identity
 
     local input_path app_bundle upstream_version
     input_path="$(resolve_input_path "$PROVIDED_INPUT")"
@@ -361,7 +390,7 @@ main() {
     write_launcher
     write_desktop_entry
     write_package_version "$upstream_version"
-    write_build_metadata "$upstream_version" "$full_version" "$app_bundle"
+    write_build_metadata "$upstream_version" "$full_version"
 
     info "Build complete: $INSTALL_DIR"
     info "Run: $INSTALL_DIR/start.sh"

@@ -28,6 +28,10 @@ on:
         required: false
         type: string
         default: ''
+      dmg_sha256:
+        description: 'Expected SHA256 checksum of the DMG'
+        required: true
+        type: string
 
 env:
   # Upload intermediate artifacts even on failure for debugging
@@ -50,30 +54,51 @@ jobs:
       # --------------------------------------------------------------
       - name: Download official DMG
         id: download
+        env:
+          DMG_URL: ${{ inputs.dmg_url }}
+          DMG_FILENAME: ${{ inputs.dmg_filename }}
+          DMG_SHA256: ${{ inputs.dmg_sha256 }}
         run: |
           mkdir -p downloads
 
-          # Determine filename from URL or user override
-          URL="${{ inputs.dmg_url }}"
-          FILENAME="${{ inputs.dmg_filename }}"
+          URL="$DMG_URL"
+          FILENAME="$DMG_FILENAME"
+          EXPECTED_SHA256="$DMG_SHA256"
+          if ! printf '%s' "$EXPECTED_SHA256" | grep -Eq '^[A-Fa-f0-9]{64}$'; then
+            echo "ERROR: dmg_sha256 must be exactly 64 hexadecimal characters"
+            exit 1
+          fi
+
           if [ -z "$FILENAME" ]; then
             FILENAME="${URL##*/}"
-            # Strip query params
             FILENAME="${FILENAME%%\?*}"
           fi
           [ -n "$FILENAME" ] || FILENAME="WorkBuddy.dmg"
+          FILENAME="$(basename "$FILENAME")"
+          if ! printf '%s' "$FILENAME" | grep -Eq '^[A-Za-z0-9._ -]+\.dmg$'; then
+            echo "ERROR: unsafe DMG filename: $FILENAME"
+            exit 1
+          fi
 
           echo "Downloading DMG from: $URL"
           echo "  → saving as: downloads/$FILENAME"
 
-          # Retry with backoff; the download can be slow
           curl -fSL --retry 3 --retry-delay 10 \
             -o "downloads/$FILENAME" \
             "$URL"
 
+          ACTUAL_SHA256="$(sha256sum "downloads/$FILENAME" | awk '{print $1}')"
+          if [ "${ACTUAL_SHA256,,}" != "${EXPECTED_SHA256,,}" ]; then
+            echo "ERROR: DMG checksum mismatch"
+            echo "Expected: $EXPECTED_SHA256"
+            echo "Actual:   $ACTUAL_SHA256"
+            exit 1
+          fi
+
           ls -lh "downloads/$FILENAME"
           echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
           echo "filesize=$(stat -c%s 'downloads/$FILENAME')" >> "$GITHUB_OUTPUT"
+          echo "sha256=$ACTUAL_SHA256" >> "$GITHUB_OUTPUT"
 
       # --------------------------------------------------------------
       # 3. Install build deps
@@ -192,6 +217,7 @@ jobs:
             |---|---|
             | 上游版本 | `${{ steps.version.outputs.upstream_version }}` |
             | 完整版本 | `${{ steps.version.outputs.full_version }}` |
+            | DMG SHA256 | `${{ steps.download.outputs.sha256 }}` |
             | 构建日期 | $(date -u +%Y-%m-%d) |
             | 构建环境 | GitHub Actions (${{ github.run_id }}) |
 

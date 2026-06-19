@@ -7,16 +7,16 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$REPO_DIR/scripts/lib/common.sh"
 
 detect_package_format() {
-    if command -v appimagetool >/dev/null 2>&1 || [ -x "$REPO_DIR/.cache/appimagetool/appimagetool-"* ] 2>/dev/null; then
-        echo "appimage"
-    elif command -v dpkg-deb >/dev/null 2>&1 && command -v dpkg >/dev/null 2>&1; then
+    if command -v dpkg-deb >/dev/null 2>&1 && command -v dpkg >/dev/null 2>&1; then
         echo "deb"
     elif command -v rpmbuild >/dev/null 2>&1; then
         echo "rpm"
     elif command -v makepkg >/dev/null 2>&1; then
         echo "pacman"
+    elif command -v curl >/dev/null 2>&1; then
+        echo "appimage"
     else
-        error "Could not detect a supported package builder. Install dpkg-deb, rpmbuild, makepkg, or appimagetool."
+        error "Could not detect a supported package builder. Install dpkg-deb, rpmbuild, makepkg, or curl for AppImage."
     fi
 }
 

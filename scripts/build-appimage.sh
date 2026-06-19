@@ -10,6 +10,7 @@ set -Eeuo pipefail
 #   PACKAGE_VERSION     Version string (default: YYYY.MM.DD.HHMMSS)
 #   PACKAGE_NAME        Application slug (default: WorkBuddy)
 #   APPIMAGETOOL_URL    Custom appimagetool download URL (default: GitHub release)
+#   APPIMAGETOOL_SHA256 Expected SHA256 checksum for downloaded appimagetool
 #   ARCH                Target architecture (default: auto-detect from uname -m)
 #
 # Dependencies at build time:
@@ -50,6 +51,9 @@ resolve_appimagetool() {
     tool_path="$cache_dir/appimagetool-$arch"
 
     if [ -x "$tool_path" ]; then
+        if [ -n "${APPIMAGETOOL_SHA256:-}" ]; then
+            printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$tool_path" | sha256sum -c - >/dev/null || error "Cached appimagetool checksum mismatch: $tool_path"
+        fi
         echo "$tool_path"
         return 0
     fi
@@ -63,6 +67,11 @@ resolve_appimagetool() {
     info "Downloading appimagetool for $arch ..."
     mkdir -p "$cache_dir"
     curl -fsSL -o "$tool_path" "$url" || error "Failed to download appimagetool from $url"
+    if [ -n "${APPIMAGETOOL_SHA256:-}" ]; then
+        printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$tool_path" | sha256sum -c - >/dev/null || error "appimagetool checksum mismatch: $tool_path"
+    else
+        warn "APPIMAGETOOL_SHA256 is not set; downloaded appimagetool cannot be verified"
+    fi
     chmod +x "$tool_path"
     echo "$tool_path"
 }
@@ -168,17 +177,23 @@ APPRUN
     appimagetool="$(resolve_appimagetool)"
     info "Building AppImage with $appimagetool ..."
     mkdir -p "$DIST_DIR"
+    rm -f "$output_file"
     # appimagetool is itself an AppImage; on systems without FUSE it may
     # fail at first. APPIMAGE_EXTRACT_AND_RUN=1 tells it to self-extract
     # to a temp dir instead of using FUSE mount, which works everywhere.
     # appimagetool exits 0 even on warnings; capture stderr for diagnostics.
+    set +e
     APPIMAGE_EXTRACT_AND_RUN=1 \
-    $appimagetool \
+    "$appimagetool" \
         --no-appstream \
         "$appdir_path" "$output_file" 2>&1 | \
-        grep -v "WARNING:.*updateinfo\|WARNING:.*appstream\|AppStream\|updateinformation" || true
+        grep -v "WARNING:.*updateinfo\|WARNING:.*appstream\|AppStream\|updateinformation"
+    local appimagetool_status="${PIPESTATUS[0]}"
+    set -e
 
-    if [ -f "$output_file" ]; then
+    [ "$appimagetool_status" -eq 0 ] || error "appimagetool failed with exit code $appimagetool_status"
+
+    if [ -s "$output_file" ]; then
         chmod 0755 "$output_file"
         info "Built AppImage: $output_file ($(du -h "$output_file" | cut -f1))"
     else

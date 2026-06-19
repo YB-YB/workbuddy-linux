@@ -56,7 +56,7 @@ apply_linux_runtime_patches() {
         (
             cd "$asar_tool_dir"
             npm init -y >/dev/null 2>&1
-            npm install @electron/asar --no-audit --no-fund --silent 2>&1
+            npm install "@electron/asar@${ELECTRON_ASAR_VERSION:-3.4.1}" --no-audit --no-fund --ignore-scripts --silent 2>&1
         ) || {
             error "Failed to install @electron/asar; cannot safely build an unpatched Linux app"
         }
