@@ -257,6 +257,71 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
     var cryptoMod = require("crypto");
     var SPILL_KEYS = ["ACC_PRODUCT_CONFIG_V3", "ACC_PRODUCT_CONFIG_V2"];
     var SPILL_THRESHOLD = 100 * 1024; // 100KB; MAX_ARG_STRLEN is 128KB
+    var wbTrackedChildren = [];
+    var wbTrackedPtys = [];
+    var wbTerminatingChildren = false;
+
+    try {
+      var electronMod = require("electron");
+      var appMod = electronMod && electronMod.app;
+    } catch (_) {}
+    function wbTrackChild(method, command, child) {
+      try {
+        if (!child || typeof child.on !== "function") return child;
+        var childPid = child.pid || null;
+        if (childPid) wbTrackedChildren.push({ method: method, command: String(command), child: child, pid: childPid });
+        child.on("exit", function (code, signal) {
+          wbTrackedChildren = wbTrackedChildren.filter(function (item) { return item.child !== child; });
+        });
+        child.on("close", function (code, signal) {
+          wbTrackedChildren = wbTrackedChildren.filter(function (item) { return item.child !== child; });
+        });
+      } catch (_) {}
+      return child;
+    }
+    function wbTrackPty(file, term) {
+      try {
+        if (!term || typeof term !== "object") return term;
+        var termPid = term.pid || null;
+        if (termPid && typeof term.kill === "function") {
+          wbTrackedPtys.push({ file: String(file), term: term, pid: termPid });
+          if (typeof term.onExit === "function") {
+            term.onExit(function (event) {
+              wbTrackedPtys = wbTrackedPtys.filter(function (item) { return item.term !== term; });
+            });
+          }
+        }
+      } catch (_) {}
+      return term;
+    }
+    function wbTerminateTrackedChildren(reason) {
+      if (wbTerminatingChildren) return;
+      wbTerminatingChildren = true;
+      wbTrackedPtys.slice().forEach(function (item) {
+        try { item.term.kill("SIGTERM"); } catch (_) {}
+      });
+      wbTrackedChildren.slice().forEach(function (item) {
+        try { item.child.kill("SIGTERM"); } catch (_) {}
+      });
+      try {
+        var timer = setTimeout(function () {
+          wbTrackedPtys.slice().forEach(function (item) {
+            try { item.term.kill("SIGKILL"); } catch (_) {}
+          });
+          wbTrackedChildren.slice().forEach(function (item) {
+            try { item.child.kill("SIGKILL"); } catch (_) {}
+          });
+        }, 1500);
+        if (timer && typeof timer.unref === "function") timer.unref();
+      } catch (_) {}
+    }
+    try {
+      if (typeof appMod !== "undefined" && appMod && appMod.on) {
+        appMod.on("before-quit", function () { wbTerminateTrackedChildren("electron-before-quit"); });
+        appMod.on("will-quit", function () { wbTerminateTrackedChildren("electron-will-quit"); });
+      }
+    } catch (_) {}
+    process.on("exit", function () { wbTerminateTrackedChildren("process-exit"); });
 
     function wbSpillPath(prefix, suffix) {
       return pathMod.join(
@@ -354,8 +419,8 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
           args = undefined;
         }
         var patched = spillOversizedEnv(options);
-        if (args === undefined) return orig.call(cp, command, patched);
-        return orig.call(cp, command, args, patched);
+        if (args === undefined) return wbTrackChild(name, command, orig.call(cp, command, patched));
+        return wbTrackChild(name, command, orig.call(cp, command, args, patched));
       }
       wrapped.__wbLinuxShimWrapped = true;
       try { cp[name] = wrapped; } catch (_) {}
@@ -375,8 +440,8 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
           options = undefined;
         }
         var patched = spillOversizedEnv(options);
-        if (callback) return orig.call(cp, command, patched, callback);
-        return orig.call(cp, command, patched);
+        if (callback) return wbTrackChild(name, command, orig.call(cp, command, patched, callback));
+        return wbTrackChild(name, command, orig.call(cp, command, patched));
       }
       wrapped.__wbLinuxShimWrapped = true;
       try { cp[name] = wrapped; } catch (_) {}
@@ -496,7 +561,7 @@ const SHIM_BODY = `// ${marker} — WorkBuddy Linux runtime patches (env + tray 
               }
               if (didPatch) opts = Object.assign({}, opts, { env: patchedEnv });
             }
-            return origSpawn.call(this, file, args, opts);
+            return wbTrackPty(file, origSpawn.call(this, file, args, opts));
           };
           result.spawn.__wbPtyWrapped = true;
         }
