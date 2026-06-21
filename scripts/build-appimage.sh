@@ -120,6 +120,70 @@ export MCP_TOOL_TIMEOUT="${MCP_TOOL_TIMEOUT:-30000}"
 # Avoid double-dipping into sidecar re-direct when launched through AppImage
 unset ELECTRON_RUN_AS_NODE
 
+# ---- Desktop entry registration ----
+# When launched as an AppImage, register/unregister the desktop entry to
+# ~/.local/share/applications/ so the app appears in the system launcher
+# (GNOME Shell, KDE Plasma, etc.) with correct name, icon and launcher path.
+REGISTER_DESKTOP="${WORKBUDDY_REGISTER_DESKTOP:-1}"
+if [ "${REGISTER_DESKTOP}" = "1" ] && [ -n "${APPIMAGE:-}" ]; then
+  APPIMAGE_PATH="$(readlink -f "$APPIMAGE")"
+  APPIMAGE_NAME="${APPIMAGE_PATH##*/}"
+  DESKTOP_FILE="$HOME/.local/share/applications/workbuddy.desktop"
+  ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
+  ICON_FILE="$ICON_DIR/workbuddy.png"
+  REG_MARKER="$HOME/.local/share/applications/.workbuddy-registered"
+
+  register_desktop=0
+  if [ ! -f "$DESKTOP_FILE" ]; then
+    register_desktop=1
+  elif [ -f "$REG_MARKER" ]; then
+    stored_path="$(cat "$REG_MARKER" 2>/dev/null || true)"
+    if [ "$stored_path" != "$APPIMAGE_PATH" ]; then
+      register_desktop=1
+    fi
+  else
+    register_desktop=1
+  fi
+
+  if [ "$register_desktop" = "1" ]; then
+    mkdir -p "$HOME/.local/share/applications" "$ICON_DIR"
+
+    # Copy icon if available
+    if [ -f "$APPDIR/usr/share/icons/hicolor/256x256/apps/workbuddy.png" ]; then
+      cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/workbuddy.png" "$ICON_FILE"
+    elif [ -f "$APPDIR/workbuddy.png" ]; then
+      cp "$APPDIR/workbuddy.png" "$ICON_FILE"
+    fi
+
+    # Write .desktop entry (freedesktop.org compliant)
+    cat > "$DESKTOP_FILE" <<DESKTOP_EOF
+[Desktop Entry]
+Name=WorkBuddy
+Comment=AI Agent Desktop Application
+Exec="${APPIMAGE_PATH}" %F
+Icon=${ICON_FILE}
+Type=Application
+Categories=Development;IDE;
+StartupNotify=true
+StartupWMClass=WorkBuddy
+MimeType=x-scheme-handler/workbuddy;
+DESKTOP_EOF
+
+    chmod 0644 "$DESKTOP_FILE"
+    echo "$APPIMAGE_PATH" > "$REG_MARKER"
+    chmod 0644 "$REG_MARKER"
+
+    # Update desktop database if available
+    if command -v update-desktop-database >/dev/null 2>&1; then
+      update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+    fi
+    # Update icon cache if available
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+      gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+    fi
+  fi
+fi
+
 # ---- Ozone / Wayland hints ----
 ARGS=(
   --disable-dev-shm-usage

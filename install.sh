@@ -301,6 +301,42 @@ StartupWMClass=WorkBuddy
 EOF
 }
 
+register_desktop_entry() {
+    local desktop_src="$INSTALL_DIR/.workbuddy-linux/$APP_ID.desktop"
+    local desktop_dst="$HOME/.local/share/applications/$APP_ID.desktop"
+    local icon_src="$INSTALL_DIR/.workbuddy-linux/workbuddy.png"
+    local icon_dst="$HOME/.local/share/icons/hicolor/256x256/apps/$APP_ID.png"
+
+    if [ ! -f "$desktop_src" ]; then
+        warn "Desktop entry not found at $desktop_src; skipping registration"
+        return 0
+    fi
+
+    mkdir -p "$HOME/.local/share/applications" \
+             "$HOME/.local/share/icons/hicolor/256x256/apps"
+
+    # Copy icon to XDG data dir for global accessibility
+    if [ -f "$icon_src" ] && [ ! -f "$icon_dst" ]; then
+        cp "$icon_src" "$icon_dst"
+        chmod 0644 "$icon_dst"
+    fi
+
+    # Copy and register desktop entry to user's XDG applications dir
+    cp "$desktop_src" "$desktop_dst"
+    chmod 0644 "$desktop_dst"
+
+    info "Registered desktop entry: $desktop_dst"
+
+    # Update desktop database if available
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+    fi
+    # Update icon cache if available
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+    fi
+}
+
 write_build_metadata() {
     local version="$1"
     local full_version="$2"
@@ -389,6 +425,7 @@ main() {
     write_icon "$app_bundle"
     write_launcher
     write_desktop_entry
+    register_desktop_entry
     write_package_version "$upstream_version"
     write_build_metadata "$upstream_version" "$full_version"
 
