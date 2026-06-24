@@ -382,16 +382,23 @@ main() {
     check_deps
     validate_app_identity
 
-    local input_path app_bundle upstream_version
+    local input_path app_bundle upstream_version detected_electron
     input_path="$(resolve_input_path "$PROVIDED_INPUT")"
     app_bundle="$(resolve_app_bundle "$input_path")"
-    ELECTRON_VERSION="$(detect_electron_version "$app_bundle")"
+    detected_electron="$(detect_electron_version "$app_bundle")"
     upstream_version="$(read_app_version "$app_bundle")"
     local full_version
     full_version="$(read_app_full_version "$app_bundle")"
 
+    # 检测 DMG 内嵌的 Electron 版本仅供日志参考，不影响实际使用的版本。
+    # 实际 Electron 版本始终由 ELECTRON_VERSION 环境变量或默认值 41.1.1 决定，
+    # 避免上游旧 DMG（如 Electron 37）意外覆盖预期版本。
+    if [ -n "$detected_electron" ] && [ "$detected_electron" != "$ELECTRON_VERSION" ]; then
+        info "Note: DMG bundles Electron ${detected_electron}, using v${ELECTRON_VERSION} instead"
+    fi
+
     info "Using app bundle: $app_bundle"
-    info "Using Electron: $ELECTRON_VERSION"
+    info "Using Electron: $ELECTRON_VERSION (detected from DMG: ${detected_electron:-N/A})"
     info "Upstream version: $upstream_version (full: $full_version)"
 
     # Export for downstream packaging scripts

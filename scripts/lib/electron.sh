@@ -43,14 +43,34 @@ download_electron_runtime() {
         mv "$partial_zip" "$cached_zip"
     else
         info "Using cached Electron runtime: $cached_zip"
-    fi
-
-    if [ -n "$checksum" ]; then
-        printf '%s  %s\n' "$checksum" "$cached_zip" | sha256sum -c - >/dev/null || error "Cached Electron runtime checksum mismatch: $zip_name"
+        # 缓存命中时也校验 checksum（如有提供），避免损坏的缓存被静默使用
+        if [ -n "$checksum" ]; then
+            printf '%s  %s\n' "$checksum" "$cached_zip" | sha256sum -c - >/dev/null || {
+                warn "Cached Electron checksum mismatch, re-downloading"
+                rm -f "$cached_zip"
+                info "Downloading $zip_name"
+                curl -L --fail --progress-bar -o "$partial_zip" "$url"
+                printf '%s  %s\n' "$checksum" "$partial_zip" | sha256sum -c - >/dev/null || error "Electron runtime checksum mismatch: $zip_name"
+                mv "$partial_zip" "$cached_zip"
+            }
+        fi
     fi
 
     unzip -qo "$cached_zip" -d "$INSTALL_DIR"
     [ -x "$INSTALL_DIR/electron" ] || error "Electron binary was not extracted"
+
+    # 验证提取的 Electron 二进制版本与预期一致
+    local extracted_version
+    extracted_version="$("$INSTALL_DIR/electron" --version 2>/dev/null || true)"
+    if [ -n "$extracted_version" ]; then
+        extracted_version="${extracted_version#v}"
+        if [ "$extracted_version" != "$ELECTRON_VERSION" ]; then
+            warn "Extracted Electron version mismatch: expected v${ELECTRON_VERSION}, got v${extracted_version}"
+        else
+            info "Verified Electron runtime: v${extracted_version}"
+        fi
+    fi
+
     rm -rf "$lock_dir"
     trap - RETURN
 }

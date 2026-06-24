@@ -1754,6 +1754,18 @@ assertRequiredPatches();
         console.warn('[apply-linux-patches] failed to write patch report: ' + err.message);
     }
 
+    // Build a user-friendly summary
+    const reqOk = Object.values(patchReport.required).filter(Boolean).length;
+    const reqTotal = Object.keys(patchReport.required).length;
+    const optOk = Object.values(patchReport.optional).filter(Boolean).length;
+    const optTotal = Object.keys(patchReport.optional).length;
+    const failedReqs = Object.entries(patchReport.required).filter(([, v]) => !v).map(([k]) => k);
+    const failedOpts = Object.entries(patchReport.optional).filter(([, v]) => !v).map(([k]) => k);
+    log(`Patch summary: ${reqOk}/${reqTotal} required OK, ${optOk}/${optTotal} optional OK` +
+        (failedReqs.length ? ` | REQUIRED FAILED: ${failedReqs.join(', ')}` : '') +
+        (failedOpts.length ? ` | OPTIONAL FAILED: ${failedOpts.join(', ')}` : '') +
+        (reqOk === reqTotal && optOk === optTotal ? ' ✅ All patches applied successfully' : ''));
+
     log('replaced app.asar in place (app.asar.unpacked left untouched)');
 })().catch(err => {
     console.error('[apply-linux-patches] pack failed:', err);
